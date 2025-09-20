@@ -21,31 +21,31 @@ t = np.array(test_df['Years'])
 # These are all available time points. 
 
 
-#mat_grid = np.array([1,2,3,4,5,7,10,15,20,30])
+# mat_grid = np.array([1,2,3,4,5,7,10])
 # mat_grid = np.array([2,3,4,5,7,10])
-mat_grid = np.array([1, 5,10]) # Matures in 5 years, but specific dates.
+mat_grid = np.array([5,10]) # Matures in 5 years, but specific dates.
 t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
 
 # For a quarterly CDS, following effective payment dates.¨ (do actual calcs at some point)
 # So actual termination dates.
 # Needs to be modified when generalized.
-# mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
-#                         for i in range(0,int(np.max(t_mat_grid)+1))]).flatten()
-# # Ensure mat_actual is sorted
-# mat_actual_sorted = np.sort(mat_actual)
+mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
+                        for i in range(0,int(np.max(t_mat_grid)+1))]).flatten()
+# Ensure mat_actual is sorted
+mat_actual_sorted = np.sort(mat_actual)
 
-# # For each element in t_mat_grid, find the smallest mat_actual that is >= element
-# t_mat_grid = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
-#                                 for val in t_mat_grid.flatten()]).reshape(t_mat_grid.shape)
+# For each element in t_mat_grid, find the smallest mat_actual that is >= element
+t_mat_grid = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
+                                for val in t_mat_grid.flatten()]).reshape(t_mat_grid.shape)
 
 
 # So effective date at first possible date above 
-# CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y','15Y',
-#                    '20Y','30Y']])
+# This is the typical grid
+# CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']])
 # CDS_obs = np.array(test_df[['2Y','3Y','4Y','5Y','7Y','10Y']])
-CDS_obs = np.array(test_df[['1Y','5Y','10Y']]) 
+CDS_obs = np.array(test_df[['5Y','10Y']]) 
 
-from Models.LHC_single import LHC_single
+from Models.LHCModels.LHC_single import LHC_single
 #from Models.Extended.LHC_Temp import LHC_single
 
 
@@ -65,7 +65,7 @@ lhc.initialise_LHC(Y_dim=1,X_dim=2,rng=None)
 
 
 # Test several random points. 
-lhc.optimal_parameter_set(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs)
+out_params= lhc.optimal_parameter_set(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs,n_restarts=10)
 
 ## Should include a function for optimizing base on say 5 differetn random points or more.
 # And then take the best.
@@ -87,6 +87,14 @@ default_intensity = lhc.default_intensity(X,Y)
 
 # ---- Model CDS ----
 CDS_model = lhc.CDS_model(t, t_mat_grid, CDS_obs)
+np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/LHC_results.npz",
+         final_param=out_params,
+         Xn=X,
+         Yn=Y,
+         Default_intensity = default_intensity,
+         CDS_model = CDS_model)
+
+
 
 # ---- Save folder ----
 save_path = f"./Exploratory/"   # <--- change to your path
@@ -94,12 +102,13 @@ os.makedirs(save_path, exist_ok=True)
 # Reuse the same figure object to overwrite plots
 
 # ---- Plot states ----
+# Only states X2,X3,... as X1 is proportional to default intensity in this model specification.
 fig, ax = plt.subplots(figsize=(10,6))
-for i in range(X.shape[0]):
+for i in range(1,X.shape[0]):
     ax.plot(t, X[i,:], label=f"X{i+1}")
 ax.set_xlabel("Time (years)")
 ax.set_ylabel("State values")
-ax.set_title("Latent States (X and Z)")
+ax.set_title("Latent States (X)")
 ax.legend()
 fig.tight_layout()
 fig.savefig(os.path.join(save_path, "states_test.png"), dpi=150)
@@ -117,11 +126,17 @@ fig.savefig(os.path.join(save_path, "survival_test.png"), dpi=150)
 plt.close(fig)
 
 # ---- Plot CDS ----
+
 fig, ax = plt.subplots(figsize=(10,6))
 tenors = mat_grid
+
+color_cycle = plt.cm.tab10.colors  # or use ax._get_lines.prop_cycler
+
 for i, tenor in enumerate(tenors):
-    ax.plot(t, CDS_obs[:, i], "o", alpha=0.7, label=f"Observed {tenor}Y CDS")
-    ax.plot(t, CDS_model[:, i], "-", linewidth=2, label=f"Model {tenor}Y CDS")
+    color = color_cycle[i % len(color_cycle)]  # pick one consistent color
+    ax.plot(t, CDS_obs[:, i], "o", alpha=0.7, color=color, label=f"Observed {tenor}Y CDS")
+    ax.plot(t, CDS_model[:, i], "-", linewidth=2, color=color, label=f"Model {tenor}Y CDS")
+
 ax.set_xlabel("Time (years)")
 ax.set_ylabel("CDS Spread")
 ax.set_title("Observed vs Model CDS for Multiple Tenors")
@@ -161,7 +176,7 @@ for k in strike_spreads:
     # Create some grid fr plotting,
     plot_grid = np.array([b_min + i*(b_max-b_min)/M for i in range(0,M+1)])
     for n in n_poly:
-        Y_t = Y[0]
+        Y_t = Y[0] # Should maybe even use y after for forecasts?
         price = np.array([lhc.PriceCDS(z,n,t=0,t0=t_start,t_M=T_option,k=k,Y=Y_t) for z in plot_grid])
         ax.plot(plot_grid,price, label=f"Price CDSO, n={n}")
         print(f"Done with n={n},k={k}")
