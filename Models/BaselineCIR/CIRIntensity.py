@@ -1,9 +1,11 @@
 import numpy as np 
-from scipy.optimize import minimize, NonlinearConstraint 
+from scipy.optimize import minimize, NonlinearConstraint, Bounds 
+
 from numba import njit, float64, int64 
 #from Models.ATSMGeneral.ATSM import ATSM
-from UnscentedKalman import KalmanUnscented as UKalman
-from UnscentedKalman import KalmanUnscentedFit as UKalmanFit
+from Models.BaselineCIR.UnscentedKalman import KalmanUnscented as UKalman
+from Models.BaselineCIR.UnscentedKalman import KalmanUnscentedFit as UKalmanFit
+from scipy.stats import norm, ncx2, gamma, expon
 
 from numba.experimental import jitclass 
 
@@ -97,7 +99,7 @@ def Laplace_Transform(cir_n,lambda_t, x, T):
 
     # Return value of Laplace Transform - Specific vals of w->ZCB price.
     
-    return np.exp(alpha + beta @ lambda_t)
+    return np.exp(alpha + beta @ lambda_t)[0]
 
 
 
@@ -111,7 +113,7 @@ def calc_coupon_leg(cir_n,t,t_mat, lambda_t):
     t_grid = np.zeros(t_grid_len+1)
     for i in range(t_grid_len+1):
         t_grid[i] = t + i * cir_n.tenor
-    x = np.array([0])
+    x = np.array([0]) # Look iinto plug straight into. Also look into grid comp.
 
     for t_idx in range(1, len(t_grid)):
         expectation = Laplace_Transform(cir_n,lambda_t, x, t_grid[t_idx] - t)
@@ -123,6 +125,7 @@ def calc_coupon_leg(cir_n,t,t_mat, lambda_t):
 # Accrued leg. Think it is going to follow similar to protection leg. 
 # so (46 on 23/59) with the additional increment term.
 # Helper function to get the grid.
+# TODO_ Look into this.
 @njit
 def _get_default_grid(u, t_grid):
     for idx in range(len(t_grid) - 1):
@@ -140,7 +143,7 @@ def accrual_integrand(u, cir_n,t,t_mat,lambda_t):
     integrand = np.real(
     (np.exp(-cir_n.r * (u-t)) * _get_default_grid(u,t_grid) *  
         (cir_derivatives(cir_n,0,u-t)[0] + 
-        cir_derivatives(cir_n,0,u-t)[1] * lambda_t) @
+        cir_derivatives(cir_n,0,u-t)[1] @ lambda_t) *
         Laplace_Transform(cir_n,lambda_t, 0, u - t)
     )
     )
@@ -149,7 +152,7 @@ def accrual_integrand(u, cir_n,t,t_mat,lambda_t):
 @njit
 def calc_accrual_leg(cir_n, t,t_mat, lambda_t):
     Ai_val = trapezoidal_rule(accrual_integrand,t,t_mat,cir_n, t,t_mat, lambda_t)
-    return np.array([Ai_val])
+    return Ai_val
 
 # Protection leg:
 
@@ -190,7 +193,7 @@ def calc_CDS_deriv(cir_n,t,t_mat, lambda_t):
 # TODO: Check this code.
 @njit
 def trapezoidal_rule(integrand, a, b,*args):
-    n_steps=100 # Maybe bup up if too little precision.
+    n_steps=200 # Maybe bup up if too little precision - may also increase optimizer precision...
     if n_steps <= 0:
         return 0.0
 
@@ -213,12 +216,11 @@ def trapezoidal_rule(integrand, a, b,*args):
 
 @njit
 def cds_spread(cir_n, X, t, t_mat_grid):
-    
     result = np.zeros(t_mat_grid.shape[0], dtype=np.float64)
     for i in range(t_mat_grid.shape[0]):
         # Pass a scalar from the array X
         result[i] = calc_CDS(cir_n, t, t_mat_grid[i], X)[0] # A
-        
+    
     return result
 
 # Linear approx for extended Kalman.
@@ -254,10 +256,12 @@ class CIRIntensity():
 
             self.kappa_p = self.kappa
             self.theta_p = self.theta
+            self.sigma_err = np.random.uniform(0.001, 0.0099, size=(1,))
+
 
         else:
             # Else, asusming some paramter tuning, set then here.
-            self.kappa, self.theta, self.sigma,self.kappa_p, self.theta_p = params[:5]
+            self.kappa, self.theta, self.sigma,self.kappa_p, self.theta_p,self.sigma_err = params
 
 
         # Build 'matrices for initialization of ATM class. 
@@ -277,21 +281,85 @@ class CIRIntensity():
 
     # For testing later...
     # Simulation will likely also be th eway to go about expression in Filipovic (tedious)
-    def simulate_intensity(self, init_val):
-        
-        return None
+    def simulate_intensity(self, lambda0,T,M,scheme):
+        # Do baseline calculations
+        delta = T / M
+        T_return = np.array([0.00001] + [delta*k for k in range(1,M+1)])
+        path = np.full(shape = M + 1, fill_value=lambda0) # to include zero.
+        W = norm.rvs(size = M) # simulate at beginning - faster!
+        if scheme == "Euler":
+            for i in range(1,M+1):
+                mu_t = self.kappa*(self.theta - path[i - 1])
+                sigma_t = self.sigma * np.sqrt(path[i-1])
+                path[i] = path[i - 1] + delta*mu_t + sigma_t * np.sqrt(delta) * W[i-1]
+        elif scheme == "Milstein":
+            for i in range(1,M+1):
+                mu_t = self.kappa*(self.theta - path[i - 1])
+                sigma_t = self.sigma * np.sqrt(path[i-1])
+                sigma_prime_t = self.sigma * 1 / (2*np.sqrt(path[i-1]))
+                path[i] = path[i - 1] + delta*mu_t + sigma_t * np.sqrt(delta) * W[i-1] + 1/2 * sigma_prime_t * sigma_t * delta*(W[i-1]**2-1)
+        elif scheme == "Exact":
+            for i in range(1,M+1):
+                k = 4 * self.kappa * self.theta / (self.sigma**2)
+                l = 4 * self.kappa * np.exp(-self.kappa * T_return[i]) / (self.sigma**2 * (1-np.exp(-self.kappa *T_return[i]))) * path[i-1]
+                factor = self.sigma**2 * (1 - np.exp(-self.kappa * T_return[i])) / (4*self.kappa)
+                path[i] = factor * ncx2.rvs(df = k, nc = l)
+        else: # in case of having to simulate all and only need last - if all simulations needed might get heavy:  
+            path1 = lambda0 # to include zero.
+            path2 = lambda0 # to include zero.
+            path3 = lambda0 # to include zero.      
+            for i in range(1,M+1):
+                path1 += delta*self.kappa*(self.theta - path1) + self.sigma * np.sqrt(path1) * np.sqrt(delta) * W[i-1]
+                path2 += delta*self.kappa*(self.theta - path2) + self.sigma * np.sqrt(path2) * np.sqrt(delta) * W[i-1] + 1/2 * self.sigma * 1 / (2*np.sqrt(path2))*self.sigma * np.sqrt(path2)*delta*(W[i-1]-1)
+            k = 4 * self.kappa * self.theta / (self.sigma**2)
+            l = 4 * self.kappa * np.exp(-self.kappa * T_return[-1]) / (self.sigma**2 * (1-np.exp(-self.kappa *T_return[-1]))) * lambda0
+            factor = self.sigma**2 * (1 - np.exp(-self.kappa * T_return[-1])) / (4*self.kappa)
+            path3 = factor * ncx2.rvs(df = k, nc = l)
+            path = np.array([path1,path2, path3])
+
+        return T_return, path
     
-    def get_cdso_price(t0,t,t_M,strike):
-        return None
-        
-    def transform_params(self,p):
-        kappa = np.exp(p[0])   # strictly > 0
-        theta = np.exp(p[1])   # strictly > 0
-        sigma = np.sqrt(2 * kappa * theta)  # ensures sigma^2 < 2*kappa*theta
-        sigma_err = np.exp(p[3])  # strictly > 0
-        return np.array([kappa, theta, sigma, sigma_err])
+    # Since we are going to simulate, we will also need to simulate defaults.
+    def get_cdso_pric_MC(self,t,t0,t_M,strike,lambda0,N,M):
+        cir_n = CIR_Theta(self.kappa,self.theta,self.sigma,
+                       self.kappa_p,self.theta_p,
+                       self.delta,self.tenor,self.r)
+        # N prices are comuted and averaged MC
+        prices = np.zeros(shape = N)
+        for i in range(N):
+            # Get default intensity process. 
+            T_return,lambda_t = self.simulate_intensity(lambda0,t0[0],M,scheme = 'Milstein')
+            # Compute prob of default at time t0
+            deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
+            Lambda = np.cumsum(lambda_t[1:]*deltas)
+            # survival_process = np.exp(-np.cumsum(lambda_t[1:]*deltas)) # only approximates
+            # default_process = 1-survival_process
+            # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
+            E = expon.rvs()
+            if Lambda[-1] >= E:
+                prices[i] = 0
+            # Else - begin to compute prices. 
+            else: 
+                lambda_end = np.array([lambda_t[-1]])
+                prot = calc_protection_leg(cir_n, t0, t_M, lambda_end)
+                # Quick fix due to way its written
+                I1 = calc_coupon_leg(cir_n, t0[0], t_M[0], lambda_end)
+                I2 = calc_accrual_leg(cir_n, t0[0], t_M[0], lambda_end)
+
+                Value_CDS = prot - strike * (I1 + I2)
+
+                # Discount back: 
+                # Note still an option, so only enter if positive. 
+
+                prices[i] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0)
+
+        price_MC = np.mean(prices)
+
+        return price_MC
+    
     
     def Kalman_func(self, params, t_obs, t_mat_grid, CDS_obs):
+        print(params)
         self.set_params(params)
         cir_params = CIR_Theta(self.kappa,self.theta,self.sigma,
                                self.kappa_p,self.theta_p,self.delta,
@@ -344,25 +412,33 @@ class CIRIntensity():
     ### ALL THAT KALMAN STUFF. Seems right, likely logal mininima.
     def kalmanfilter(self,t_obs, t_mat_grid, CDS_obs):
         # Construct matrices for fitting model.
-        n_mat = CDS_obs.shape[1]
-        sigma_err = np.random.uniform(0.01, 0.099, size=(1,))
-
-        x0 = np.array([self.kappa,self.theta,self.sigma,self.kappa_p,self.theta_p, sigma_err]).flatten()
+        x0 = np.array([self.kappa,self.theta,self.sigma,self.kappa_p,self.theta_p, self.sigma_err]).flatten()
 
         # res = minimize(self.Kalman_func, x0,
         #                args=(t_obs, t_mat_grid, CDS_obs), method='Nelder-Mead')
 
-        # If too small parameters, might get stuck at zero/undefined values.
-        # bounds = [
-        # (1e-6, None),  # kappa > 0
-        # (1e-6, None),  # theta > 0
-        # (1e-6, None),  # sigma > 0
-        # (1e-6, None),  # kappa_p > 0
-        # (1e-6, None),  # theta_p > 0
-        # (1e-6, None)   # sigma_err > 0
-        # ]
-
-        # feller_con = NonlinearConstraint(lambda p: 2*p[3]*p[4] - p[2]**2, 0, np.inf)
+        # # If too small parameters, might get stuck at zero/undefined values.
+        # bounds = Bounds(
+        #     [1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6],  # lower bounds
+        #     [np.inf, np.inf, np.inf, np.inf, np.inf, np.inf]  # upper bounds
+        # )
+        # feller_con_p = NonlinearConstraint(lambda p: 2*p[0]*p[1] - p[2]**2, 0, np.inf)
+        # feller_con_q = NonlinearConstraint(lambda p: 2*p[3]*p[4] - p[2]**2, 0, np.inf)
+        # res = minimize(
+        #     self.Kalman_func,   # you don’t need penalized_obj anymore!
+        #     x0,
+        #     args=(t_obs, t_mat_grid, CDS_obs),
+        #     method="trust-constr",
+        #     bounds=bounds,
+        #     constraints=[feller_con_p, feller_con_q],
+        #     options={
+        #         "xtol": 1e-10,         # parameter tolerance
+        #         "gtol": 1e-10,         # gradient tolerance
+        #         "barrier_tol": 1e-12,  # feasibility tolerance for constraints
+        #         "maxiter": 5000,
+        #         "verbose": 3
+        #     }
+        # )
 
         res = minimize(
             self.penalized_obj,
@@ -370,8 +446,8 @@ class CIRIntensity():
             args=(t_obs, t_mat_grid, CDS_obs, self.Kalman_func),
             method='Nelder-Mead',
             options = {
-                "xatol": 1e-4,
-                "fatol": 1e-4,
+                "xatol": 1e-6,
+                "fatol": 1e-6,
                 "maxiter": 500,
                 "disp": True
             }
@@ -387,11 +463,6 @@ class CIRIntensity():
 
         return params_opt,opt_likelihood
 
-        #Xn,Zn, pred_Xn, pred_Pn, pred_Zn = self.Kalman_out(params_opt, t_obs, t_mat_grid, CDS_obs)
-
-        # Return optimal states.
-        #print("Kalman Filter Done") 
-        #return Xn, Zn, pred_Xn, pred_Pn, pred_Zn
     
     def run_n_Kalman(self,t_obs, t_mat_grid, CDS_obs, n_optim=5):
     
@@ -410,132 +481,163 @@ class CIRIntensity():
 
         # Get values for done optimization. 
         Xn,Zn, Pn = self.Kalman_out(final_param, t_obs, t_mat_grid, CDS_obs)
+        # Set parameters, so eimulation is possible.
+        self.set_params(params=final_param)
 
         # Return optimal states.
         print("Kalman Filter Done") 
         return final_param, Xn,Zn, Pn
-    
-cir = CIRIntensity(0.0252, 0.4, 0.25)
-x0 = np.array([0])
-#alpha_num, beta_num = cir.solve_ricatti(beta_0=x0,alpha_0=0,T=1)
-# alpha_lando,beta_lando = cir.cir_solution(x=0,T=1)
+        
+def __main__():
+    cir = CIRIntensity(0.0252, 0.4, 0.25)
+    x0 = np.array([0])
+    #alpha_num, beta_num = cir.solve_ricatti(beta_0=x0,alpha_0=0,T=1)
+    # alpha_lando,beta_lando = cir.cir_solution(x=0,T=1)
 
-# #print(f'Numerical alpha,beta: {alpha_num,beta_num}')
-# print(f'Lando alpha,beta: {alpha_lando,beta_lando}
-
-
-import pandas as pd
-t_grid = [0 + 0.25* i for i in range(0, int(10 / 0.25)+1)]
-# Test of grid
-
-_get_default_grid(0.5,t_grid)    
-
-#### Preliminary investigation. 
-test_df = pd.read_excel("./Data/test_data.xlsx")
-
-# Pivot
-test_df = test_df.pivot(index = ['Date','Ticker'],
-                        columns='Tenor',values = 'Par Spread').reset_index()
-# Test on subset data ownly to get very few obs. One large spread increase to test.
-# test_df = test_df[(test_df['Date']<'2021-01-01') & (test_df['Date']>='2019-06-01')]
-
-test_df = test_df[5::5]
-
-# Function to convert tenors to months to same metric (so
-test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
-t = np.array(test_df['Years'])
-# These are all available time points. 
+    # #print(f'Numerical alpha,beta: {alpha_num,beta_num}')
+    # print(f'Lando alpha,beta: {alpha_lando,beta_lando}
 
 
-# mat_grid = np.array([1,2,3,4,5,7,10,15,20,30])
-mat_grid = np.array([5,10]) # Matures in 5 years, but specific dates.
-#t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
+    import pandas as pd
+    t_grid = [0 + 0.25* i for i in range(0, int(10 / 0.25)+1)]
+    # Test of grid
 
-# CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y','15Y',
-#                    '20Y','30Y']])
-CDS_obs = np.array(test_df[['5Y']] ) # ,'5Y','10Y']]) 
-#cir.kalmanfilter(t,mat_grid,CDS_obs,K=10)
-cir_params = CIR_Theta(cir.kappa,cir.theta,cir.sigma,
-                       cir.kappa_p,cir.theta_p,
-                       cir.delta,cir.tenor,cir.r)
+    # _get_default_grid(0.5,t_grid)    
+
+    #### Preliminary investigation. 
+    test_df = pd.read_excel("./Data/test_data.xlsx")
+
+    # Pivot
+    test_df = test_df.pivot(index = ['Date','Ticker'],
+                            columns='Tenor',values = 'Par Spread').reset_index()
+    # Test on subset data ownly to get very few obs. One large spread increase to test.
+    #test_df = test_df[(test_df['Date']<'2021-01-01') & (test_df['Date']>='2019-06-01')]
+    test_df = test_df[5::5]
+
+    # Function to convert tenors to months to same metric (so
+    test_df['Years'] = ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
+    t = np.array(test_df['Years'])
+    # These are all available time points. 
 
 
-# Construct matrices for fitting model.
-# n_mat = CDS_obs.shape[1]
-#sigma_err =np.array([0.03])
-#params = np.array([cir.kappa,cir.theta,cir.sigma,cir.kappa_p,cir.theta_p, sigma_err]).flatten()
-#Xn,Zn, Pn = cir.Kalman_out(params, t,mat_grid, CDS_obs)
+    # mat_grid = np.array([1,2,3,4,5,7,10,15,20,30])
+    mat_grid = np.array([5]) # Matures in 5 years, but specific dates.
+    t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
 
+    # CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y','15Y',
+    #                    '20Y','30Y']])
+    CDS_obs = np.array(test_df[['5Y']] ) # ,'5Y','10Y']]) 
+    cir_params = CIR_Theta(cir.kappa,cir.theta,cir.sigma,
+                        cir.kappa_p,cir.theta_p,
+                        cir.delta,cir.tenor,cir.r)
 
-# Xn, pred_Xn, pred_Pn, pred_Zn = cir.Kalman_out(x0,  sigma_err, t, mat_grid, CDS_obs,K=3)
+    # final_param = np.array([cir.kappa,cir.theta,cir.sigma, cir.kappa_p,cir.theta_p, np.array([0.03])]).flatten()
+    # # Fit the model
+    # Xn,Zn, Pn = cir.Kalman_out(final_param, t, t_mat_grid, CDS_obs)
 
-# cir.set_params(params = np.array([0.17057755, 0.01870321, 0.12281393, 0.11802593, 0.06389869, 0.00059881]))
+    final_param, Xn,Zn, Pn = cir.run_n_Kalman(t,t_mat_grid,CDS_obs,n_optim=6)
 
-final_param, Xn,Zn, Pn = cir.run_n_Kalman(t,mat_grid,CDS_obs,n_optim=10)
+    # # Save parameters somewhere for callable again. 
+    np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Kalman_resultsCIR.npz",
+            final_param=final_param,
+            Xn=Xn,
+            Zn=Zn,
+            Pn = Pn)
 
-# Save parameters somewhere for callable again. 
-np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Kalman_resultsCIR.npz",
-         final_param=final_param,
-         Xn=Xn,
-         Zn=Zn,
-         Pn = Pn)
-
-data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Kalman_resultsCIR.npz")
-final_param = data["final_param"]
-Xn = data["Xn"]
-Zn = data["Zn"]
-Pn = data["Pn"]
+    data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Kalman_resultsCIR.npz")
+    final_param = data["final_param"]
+    Xn = data["Xn"]
+    Zn = data["Zn"]
+    Pn = data["Pn"]
 
 
 
-import matplotlib.pyplot as plt
-import os
-### Test: Compare To CDS. 
-save_path = f"./Exploratory/"   # <--- change to your path
-os.makedirs(save_path, exist_ok=True)
-fig, ax = plt.subplots(figsize=(10,6))
-ax.plot(t, Xn.flatten(), label=f"Default indensity")
-#ax.plot(t, pred_Xn.flatten(), label=f"Predictions")
+    import matplotlib.pyplot as plt
+    import os
+    ### Test: Compare To CDS. 
+    save_path = f"./Exploratory/"   # <--- change to your path
+    os.makedirs(save_path, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10,6))
+    ax.plot(t, Xn.flatten(), label=f"Default intensity")
+    #ax.plot(t, pred_Xn.flatten(), label=f"Predictions")
 
-ax.set_xlabel("Time (years)")
-ax.set_ylabel("Default Intensity")
-ax.set_title("Default itensity CIR model, Kalman estimation")
-ax.legend()
-fig.tight_layout()
-fig.savefig(os.path.join(save_path, "KalmanCIR.png"), dpi=150)
-plt.close(fig)
-
-
-### Test: Compare To CDS.   
-fig, ax = plt.subplots(figsize=(10,6))
-for i in range(Zn.shape[1]):
-    #ax.plot(t, pred_Zn[i,:].flatten(), label=f"Predicted CDS Spread, Maturity {mat_grid[i]}")
-    ax.plot(t, CDS_obs[:, i], "o", alpha=0.7, label=f"Observed {mat_grid[i]}Y CDS")
-    ax.plot(t[1:], Zn[1:,i].flatten(), "-", linewidth=2, label=f"Kalman Filter {mat_grid[i]}Y CDS")
-ax.set_xlabel("Time (years)")
-ax.set_ylabel("CDS Spread")
-ax.set_title("Kalman CDS Spreads")
-ax.legend()
-fig.tight_layout()
-fig.savefig(os.path.join(save_path, "CDSKalman_Check.png"), dpi=150)
-plt.close(fig)
+    ax.set_xlabel("Time (years)")
+    ax.set_ylabel("Default Intensity")
+    ax.set_title("Default itensity CIR model, Kalman estimation")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_path, "KalmanCIR.png"), dpi=150)
+    plt.close(fig)
 
 
+    ### Test: Compare To CDS.   
+    fig, ax = plt.subplots(figsize=(10,6))
+    for i in range(Zn.shape[1]):
+        #ax.plot(t, pred_Zn[i,:].flatten(), label=f"Predicted CDS Spread, Maturity {mat_grid[i]}")
+        ax.plot(t, CDS_obs[:, i], "o", alpha=0.7, label=f"Observed {mat_grid[i]}Y CDS")
+        ax.plot(t, Zn[:,i].flatten(), "-", linewidth=2, label=f"Kalman Filter {mat_grid[i]}Y CDS")
+    ax.set_xlabel("Time (years)")
+    ax.set_ylabel("CDS Spread")
+    ax.set_title("Kalman CDS Spreads")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_path, "CDSKalman_Check.png"), dpi=150)
+    plt.close(fig)
 
 
-#### to load the parameters again. 
-# Load later
-# data = np.load("kalman_results.npz")
-# final_param = data["final_param"]
-# Xn = data["Xn"]
-# Zn = data["Zn"]
-# pred_Xn = data["pred_Xn"]
-# pred_Pn = data["pred_Pn"]
-# pred_Zn = data["pred_Zn"]
+    #### Option pricing using paramters. Would be a MC approach likely. 
+    # Might be possible with a Fourier approach? 
+
+    # Simulate a few paths to test.
+
+    # Simulate default intensities starting from 'today' (either today is start of period or last day)
+    # Last day makes the most sense, as we then estimate prices going forward. 
+
+    T_simul = 10
+    M = 50
+    delta = T_simul / M
+    T_plot = np.array([i*delta for i in range(0,M+1)])
+    np.random.seed(11)
+    T_return, lambda_euler = cir.simulate_intensity(lambda0=Xn[-1,:],T=T_simul,M=M,scheme="Euler")
+    np.random.seed(11)
+    T_return,lambda_mil = cir.simulate_intensity(lambda0=Xn[-1,:],T=T_simul,M=M,scheme="Milstein")
+    np.random.seed(11)
+    T_return,lambda_ex = cir.simulate_intensity(lambda0=Xn[-1,:],T=T_simul,M=M,scheme="Exact")
 
 
-#### Option pricing using paramters. Would be a MC approach likely. 
-# Might be possible with a Fourier approach? 
+    fig, ax = plt.subplots(figsize=(10,6))
+    ax.plot(T_plot, lambda_euler, label=f"Euler scheme,M={M}")
+    ax.plot(T_plot, lambda_mil, label=f"Milstein scheme,M={M}")
+    #ax.plot(T_plot, lambda_ex, label=f"Exact scheme,M={M}")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Intensity Process")
+    ax.grid()
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_path, "simul_cir.png"), dpi=150)
+    plt.close(fig)
 
 
-test = 1
+
+    ### Attempt to calculate CDSO prices - 1Y5Y year credit default swaption.
+    t = np.array([0])
+    t_start = np.array([1])
+    T_option = t_start + 5
+
+    # Get time zero stats. 
+    strike_spreads = np.array([250,300,350]) / 10000
+    priceCDSO = np.zeros(strike_spreads.shape[0])
+
+
+    for i,k in enumerate(strike_spreads):
+        priceCDSO[i] = cir.get_cdso_pric_MC(t=t,t0=t_start,
+                                    t_M = T_option,strike = k,
+                                    lambda0 = Xn[-1,:],N = 1000,M = 10000)
+
+
+    print(f'CDSO prices {priceCDSO} for spreads in {strike_spreads}')
+
+
+    test = 1
+
+    test = 1

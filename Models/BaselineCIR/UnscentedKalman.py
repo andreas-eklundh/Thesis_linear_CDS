@@ -7,9 +7,8 @@ from scipy.linalg import sqrtm
 
 @njit
 def update_step(X_pred, P_pred, h, R_k, t_obs, t_mats, cir, CDS_k,
-                     alpha=1e-03, kappa_u=0.0, beta=2.0):
+                     alpha=5e-01, kappa_u=0.0, beta=2.0):
     L = X_pred.shape[0]
-    kappa_u = 3 - L
     lam = alpha**2 * (L + kappa_u) - L
     c = L + lam
 
@@ -60,14 +59,15 @@ def update_step(X_pred, P_pred, h, R_k, t_obs, t_mats, cir, CDS_k,
     m_k = X_pred + K_k @ vn
     P_k = P_pred - K_k @ S_k @ K_k.T
 
+    # In principle, should compute some actual estimate of Zn - need to punish. 
+
     return mu_k, vn,S_k, m_k, P_k
 
 # Prediction step:
 @njit
 def prediction_step(Xn, Pn, h, Q_k,phi_0,phi_X,
-                     alpha=1e-03, kappa_u=0.0, beta=2.0):
+                     alpha=0.5, kappa_u=0.0, beta=2.0):
     L = Xn.shape[0]
-    kappa_u = 3 - L
     lam = alpha**2 * (L + kappa_u) - L
     c = L + lam
 
@@ -140,9 +140,10 @@ def KalmanUnscented(params, cir_params,t_obs, t_mat_grid, CDS,h):
     for n in range(0,n_obs):
         # UPDATE STEP
         Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step(pred_Xn,pred_Pn,h,Sigma,
-                                                            t_obs[n],t_mat_grid,cir_params,CDS[n,:])
+                                                            t_obs[n],t_mat_grid[:,n],cir_params,CDS[n,:])
 
-
+        # Zn in is actually h(Xn) as Xn is our best guess. 
+        Zn[n,:] = h(cir_params,Xn[n,:],t_obs[n],t_mat_grid[:,n])
         # Create arrays based on obs. 
         phi_0 = (1-np.exp(-kappa_p * Delta)) * theta_p
         phi_X = np.exp(-kappa_p * Delta)
@@ -154,6 +155,7 @@ def KalmanUnscented(params, cir_params,t_obs, t_mat_grid, CDS,h):
             Q_t = Q_t.reshape((1,1))
             Delta = t_obs[n+1] - t_obs[n]
             pred_Xn, pred_Pn = prediction_step(Xn[n,:],Pn[n,:,:],trans_map,Q_t, phi_0,phi_X)     
+
 
     return  Xn,Zn, Pn
 
@@ -192,12 +194,11 @@ def KalmanUnscentedFit(params, cir_params,t_obs, t_mat_grid, CDS,h):
 
 
     # Run algo. 
-    for n in range(0,n_obs-1):
+    for n in range(0,n_obs):
         # UPDATE STEP
         # Update latent state
-
         Zn, vn,S_k, Xn, Pn = update_step(pred_Xn,pred_Pn,h,Sigma,
-                                                            t_obs[n],t_mat_grid,cir_params,CDS[n,:])
+                                                            t_obs[n],t_mat_grid[:,n],cir_params,CDS[n,:])
         # If unrealistic values, ignore.
         if np.any((Xn < 0)):
             return 1e12 
@@ -220,7 +221,6 @@ def KalmanUnscentedFit(params, cir_params,t_obs, t_mat_grid, CDS,h):
             Delta = t_obs[n+1] - t_obs[n] # Only apprx for now. Move to loop maybe.
 
             # Get point updates and update Z predictions
-            t_mats = t_obs[n+1] + t_mat_grid
             # Use CIR Variance to get predictions.
             Q_t = (sigma**2 * theta_p * (1-np.exp(-kappa_p * Delta))**2 / (2 * kappa_p) + 
                 Xn * sigma**2 * (np.exp(-kappa_p * Delta) - np.exp(-2*kappa_p * Delta))/ kappa_p)

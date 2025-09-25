@@ -456,7 +456,7 @@ def kalmanfilter_out(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p):
     # Just to set Xn,Pn, but not needed to be thse vals.
     # Don't know these values. Just arbitrary guessing. on X. Remainder calc.
     Y0 = np.array([1])
-    X0 = np.ones(shape=(lhc_q.m,)) *0.5
+    X0 = np.ones(shape=(lhc_q.m,)) *0.2
 
     chi_0 = np.empty(Y0.shape[0] + X0.size, dtype=np.float64)
     chi_0[:Y0.shape[0]] = Y0
@@ -486,6 +486,8 @@ def kalmanfilter_out(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p):
 
         Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Xm1,pred_Pn,cds_fun_lin,R_k,
                                                             t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+        # Use prediction in the actual CDS calc.
+        Zn[n,:] = cds_fun(lhc_q,Xn[n,:],t_obs[n],t0[n],T_M_grid[:,n])
         pred_Xm1 = pred_Xn.copy()
 
         if (n < n_obs - 1): # Not sensible to predict further.
@@ -521,7 +523,7 @@ def kalmanfilter_out(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p):
 # One kalman filter for optimizing and one for outputting.
 @njit
 def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p):
-    print(params)
+    # print(params)
     # Define the parameters already to be able to look over them
     gamma1 = params[2*lhc_p.m]
     params_p = params[2*lhc_p.m+1:]
@@ -579,7 +581,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p):
     # Don't know these values. Just arbitrary guessing. on X. Remainder calc.
     # NOTE: SHOULD BE INITIALIZED AT EXPECTED VAL.
     Y0 = np.array([1])
-    X0 = np.ones(shape=(lhc_q.m,)) *0.5
+    X0 = np.ones(shape=(lhc_q.m,)) *0.2
     chi_0 = np.empty(Y0.shape[0] + X0.size, dtype=np.float64)
     chi_0[:Y0.shape[0]] = Y0
     chi_0[Y0.shape[0]:] = X0.ravel()
@@ -667,7 +669,7 @@ def get_states(lhc, t_obs, T_M_grid, CDS_obs):
     n_mat = T_M_grid.shape[0]
 
     # Define initial values
-    X0 = np.ones(shape=(lhc.m,)) *0.5
+    X0 = np.ones(shape=(lhc.m,)) *0.2
     X = np.ones((lhc.m, n_obs))
     Y = np.ones((n_obs)) # Implicitly sets Y0
     # Time 0 values
@@ -746,8 +748,8 @@ class LHC_single():
         self.Y_dim, self.m = Y_dim, X_dim
         self.a = np.ones((self.Y_dim,1))                                      # Y dim is 1 for LHC
         # Set inital values. Need to comply with (38)
-        self.kappa = rng.uniform(0.1, 0.9, size=(X_dim,))       # Kappa given 
-        self.gamma1 = np.array([np.min(self.kappa) - 1*10**(-6)])       # gamma1 strictly pos.
+        self.kappa = rng.uniform(0.2, 0.9, size=(X_dim,))       # Kappa given 
+        self.gamma1 = np.array([np.min(self.kappa) - 1e-1])       # gamma1 strictly pos.
         self.theta = np.zeros(X_dim)
 
         for i in range(0,X_dim):
@@ -1039,33 +1041,49 @@ class LHC_single():
 
 
 ######################### KALMAN FILTER SECTION #########################
-    def build_P_params(self,rng=None):
+    def build_P_params(self,params=None, gamma1=None,rng=None):
         # NOTE: Gamma does not change!
-        if rng is None:
-            rng = np.random.default_rng()  # independent each time
-        Y_dim, X_dim = self.Y_dim, self.m
-        gamma1 = self.gamma1[0]
+        if params is None:
+            if rng is None:
+                rng = np.random.default_rng()  # independent each time
+            Y_dim, X_dim = self.Y_dim, self.m
+            gamma1 = self.gamma1[0]
 
-        # Set inital values. Need to comply with (38)
-        kappa = rng.uniform(gamma1, 0.99, size=(X_dim,))       # Kappa given 
-        theta = np.zeros(X_dim)
+            # Set inital values. Need to comply with (38)
+            kappa = rng.uniform(gamma1, 0.99, size=(X_dim,))       # Kappa given 
+            theta = np.zeros(X_dim)
 
-        for i in range(0,self.m):
-            theta[i] = rng.uniform(1e-6, 1-gamma1/kappa[i], size=(1,))       # Theta coeffs
-        
-        ### New stuff: All the ones needed here e.g. sigma, sigma_Err
-        sigma_i = rng.uniform(0.01, 0.09, size=(X_dim,))       # Kappa given 
-        sigma_err = rng.uniform(0.01, 0.09, size=(Y_dim,))       # Kappa given 
+            for i in range(0,self.m):
+                theta[i] = rng.uniform(1e-6, 1-gamma1/kappa[i], size=(1,))       # Theta coeffs
+            
+            ### New stuff: All the ones needed here e.g. sigma, sigma_Err
+            sigma_i = rng.uniform(0.1, 0.15, size=(X_dim,))       # Kappa given 
+            # Sigma error is likely smalll.
+            sigma_err = rng.uniform(0.00001, 0.0001, size=(Y_dim,))       # Kappa given 
 
-        r = self.r
-        Y_dim = self.Y_dim
-        delta = self.delta
-        tenor = self.tenor 
-        # Rebuild P parameters.
-        lhc = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
+            r = self.r
+            Y_dim = self.Y_dim
+            delta = self.delta
+            tenor = self.tenor 
+            # Rebuild P parameters.
+            lhc = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
+
+        else:
+            gamma1 = gamma1[0] # due to parametrization
+            kappa, theta = params[:self.m],params[self.m:2*self.m]
+            sigma_i,sigma_err = params[2*self.m:3*self.m], np.array([params[-1]])
+            r = self.r
+            Y_dim = self.Y_dim
+            delta = self.delta
+            tenor = self.tenor 
+            # Rebuild P parameters.
+            lhc = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
+
+        self.kappa_p,self.theta_p, self.sigma, self.sigma_err=kappa,theta, sigma_i, sigma_err
+
+        return lhc
 
 
-        return lhc,kappa,theta, sigma_i, sigma_err
 
     def get_kalman_params(self,t_obs, T_M_grid, CDS_obs,x0,lhc_p):
         t0 = t_obs
@@ -1088,7 +1106,7 @@ class LHC_single():
             options = {
                 "xatol": 1e-4,
                 "fatol": 1e-4,
-                "maxiter": 1000,
+                "maxiter": 2000,
                 "disp": True
             }
         )
@@ -1111,15 +1129,15 @@ class LHC_single():
             # Set Q parameters.
             self.initialise_LHC(self.Y_dim,self.m,rng)
             # Get P Parameters /initialise
-            lhc_p,kappa_p,theta_p, sigma, sigma_err = self.build_P_params(rng=rng)
+            lhc_p = self.build_P_params(params=None, gamma1=None,rng=rng)
             # Flatten for scipy. 
             x0_Q = self.flatten_params()
 
             x0_P = np.concatenate([
-                kappa_p.flatten(),
-                theta_p.flatten(),
-                sigma.flatten(),
-                sigma_err
+                self.kappa_p.flatten(),
+                self.theta_p.flatten(),
+                self.sigma.flatten(),
+                self.sigma_err
             ])
 
             x0 = np.concatenate([x0_Q,x0_P])
@@ -1137,6 +1155,30 @@ class LHC_single():
         return out_params, Xn,Zn, Pn
 
 
+####### As a consequence of Kalman filtering, we may calculate MPR ###########
+    def get_MPR(self, opt_params, Y,X,CDS):
+        ## Following appendix B for this.
+        Lambda = np.zeros((CDS.shape[0],self.m))
+        girsanov = np.zeros((CDS.shape[0],self.m))
+
+        # First, need to build parameters again. Both Q and P params.
+        # build parameters if not done yet. 
+        # Rebuild Q paramters.
+        self.rebuild_dynamics()
+        # lhc_p 
+        lhc_p = self.build_P_params(opt_params,np.array([opt_params[2*self.m]]))
+        # Get P paramters.
+        for n in range(CDS.shape[0]):
+            nom = (lhc_p.b - self.b) * Y[n] + ((lhc_p.beta - self.beta) @ X[:,n])
+            denom = self.sigma * np.sqrt(X[:,n] * (Y[n]-X[:,n]))
+
+            # Compute MPR for m
+            for m in range(self.m):
+                Lambda[n,m] = nom[m] / denom[m]
+                girsanov[n,m] = nom[m] 
+
+        return Lambda, girsanov
+    
 
 
 ########### OPTION APPROXIMATION FORMULAS on credit default swaps. ###################
@@ -1173,6 +1215,45 @@ class LHC_single():
         return pi
     
 
+    ###### Montecarlo simulation of processes #############3
+    # Below function to simulate the dicretized processes. 
+    def simul_latent_states(self, Chi0,T,M,measure,seed=None):
+        delta = T / M
+        T_return = np.array([0.00001] + [delta*k for k in range(1,M+1)])
+        path = np.ones((M + 1, self.m+self.Y_dim))
+        # Set initial value. 
+        path[0,:] = Chi0
+        W = norm.rvs(size = (M,self.m),random_state=seed) # simulate at beginning - faster!
+        # Get A matrix. Add argument if timul under P or Q.
+        params_Q = np.concatenate([self.kappa,self.theta,self.gamma1])
+        params_P = np.concatenate([self.kappa_p,self.theta_p, self.sigma, self.sigma_err])
+        params = np.concatenate([params_Q,params_P])
+        # Set also P params. 
+        lhc = self.build_P_params(params[2*self.m+1:],self.gamma1)
+        if measure == 'P':
+            A,cov_trans,_ = build_matrices(lhc,self.sigma,self.sigma_err,1)
+    
+        elif measure == 'Q':
+            self.rebuild_dynamics()
+            # Get A
+            A = self.A
+            _,cov_trans,_ = build_matrices(lhc,self.sigma,self.sigma_err,1)
+
+        else:
+            raise ValueError(f"Unknown measure: {measure}")
+        for i in range(1,M+1):
+            mu_t = A @ path[i - 1,:]
+            # Create Sigma:
+            P_state = np.array(path[i - 1,1:] * (path[i-1,0] - path[i-1,1:]))
+            Sigma_prod = (cov_trans @ np.diag(np.sqrt(P_state))) 
+            # Out
+            path[i,:] = path[i-1,:] + delta*mu_t +  np.sqrt(delta) * Sigma_prod @ W[i-1,:]
+
+        return T_return, path
+    
+
+
+
 ## Pricing numba functions:
 @njit
 def LegendrePoly(x, n):
@@ -1207,4 +1288,6 @@ def GenLegendrePoly(x, n,b_min,b_max):
     mathL = np.sqrt((1+2*n)/(2*sigma**2)) * LegendrePoly((x - mu) / sigma,n)
 
     return mathL
+
+
 

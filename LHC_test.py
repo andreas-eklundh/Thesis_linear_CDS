@@ -13,7 +13,7 @@ test_df = test_df.pivot(index = ['Date','Ticker'],
                         columns='Tenor',values = 'Par Spread').reset_index()
 # Test on subset data ownly to get very few obs. One large spread increase to test.
 #test_df = test_df[(test_df['Date']<'2021-01-01') & (test_df['Date']>='2019-06-01')]
-#test_df = test_df[5::5]
+test_df = test_df[5::5]
 
 # Function to convert tenors to months to same metric (so
 test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
@@ -23,7 +23,7 @@ t = np.array(test_df['Years'])
 
 # mat_grid = np.array([1,2,3,4,5,7,10])
 # mat_grid = np.array([2,3,4,5,7,10])
-mat_grid = np.array([5,10]) # Matures in 5 years, but specific dates.
+mat_grid = np.array([5]) # Matures in 5 years, but specific dates.
 t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
 
 # For a quarterly CDS, following effective payment dates.¨ (do actual calcs at some point)
@@ -43,7 +43,7 @@ t_mat_grid = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val,
 # This is the typical grid
 # CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']])
 # CDS_obs = np.array(test_df[['2Y','3Y','4Y','5Y','7Y','10Y']])
-CDS_obs = np.array(test_df[['5Y','10Y']]) 
+CDS_obs = np.array(test_df[['5Y']]) 
 
 from Models.LHCModels.LHC_single import LHC_single
 #from Models.Extended.LHC_Temp import LHC_single
@@ -58,14 +58,14 @@ lhc = LHC_single( r=0.0252,delta=0.4,cds_tenor= 0.25 )
 # initialise guesses for params. 
 # set Y_dim=1, X_dim=1 to test remaining logic, X_dim>1 for general purposes.
 # Why? X_dim=1 easy to solve problem if using only one spread. 
-lhc.initialise_LHC(Y_dim=1,X_dim=2,rng=None)
+lhc.initialise_LHC(Y_dim=1,X_dim=1,rng=None)
 
 ### TODO: Try to implement a totally basic exapmple CF 40.
 # lhc.optimize_params(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs)
 
 
 # Test several random points. 
-out_params= lhc.optimal_parameter_set(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs,n_restarts=10)
+out_params= lhc.optimal_parameter_set(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs,n_restarts=1)
 
 ## Should include a function for optimizing base on say 5 differetn random points or more.
 # And then take the best.

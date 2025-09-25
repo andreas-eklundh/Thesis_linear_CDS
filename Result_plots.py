@@ -42,6 +42,8 @@ XnLHCK = data["Xn"]
 YnLHCK=data["Yn"]
 ZnLHCK = data["CDS_model"]
 Default_intensityLHCK = data["Default_intensity"]
+mprLHCK = data["MPR"]
+
 
 
 # Do the plotting. 
