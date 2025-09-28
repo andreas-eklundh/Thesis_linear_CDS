@@ -117,7 +117,7 @@ def calc_coupon_leg(cir_n,t,t_mat, lambda_t):
 
     for t_idx in range(1, len(t_grid)):
         expectation = Laplace_Transform(cir_n,lambda_t, x, t_grid[t_idx] - t)
-        I += cir_n.tenor * np.exp(-cir_n.r * (t_grid[t_idx] - t)) * expectation
+        I += (t_grid[t_idx]-t_grid[t_idx-1]) * np.exp(-cir_n.r * (t_grid[t_idx] - t)) * expectation
 
     return I
 
@@ -193,7 +193,7 @@ def calc_CDS_deriv(cir_n,t,t_mat, lambda_t):
 # TODO: Check this code.
 @njit
 def trapezoidal_rule(integrand, a, b,*args):
-    n_steps=200 # Maybe bup up if too little precision - may also increase optimizer precision...
+    n_steps=50 # Maybe bup up if too little precision - may also increase optimizer precision...
     if n_steps <= 0:
         return 0.0
 
@@ -281,7 +281,13 @@ class CIRIntensity():
 
     # For testing later...
     # Simulation will likely also be th eway to go about expression in Filipovic (tedious)
-    def simulate_intensity(self, lambda0,T,M,scheme):
+    def simulate_intensity(self, lambda0,T,M,scheme, measure):
+        if measure == 'P':
+            theta = self.theta_p
+            kappa = self.kappa_p
+        elif measure == 'Q':
+            theta = self.theta
+            kappa = self.kappa
         # Do baseline calculations
         delta = T / M
         T_return = np.array([0.00001] + [delta*k for k in range(1,M+1)])
@@ -289,33 +295,21 @@ class CIRIntensity():
         W = norm.rvs(size = M) # simulate at beginning - faster!
         if scheme == "Euler":
             for i in range(1,M+1):
-                mu_t = self.kappa*(self.theta - path[i - 1])
+                mu_t = kappa*(theta - path[i - 1])
                 sigma_t = self.sigma * np.sqrt(path[i-1])
                 path[i] = path[i - 1] + delta*mu_t + sigma_t * np.sqrt(delta) * W[i-1]
         elif scheme == "Milstein":
             for i in range(1,M+1):
-                mu_t = self.kappa*(self.theta - path[i - 1])
+                mu_t = kappa*(theta - path[i - 1])
                 sigma_t = self.sigma * np.sqrt(path[i-1])
                 sigma_prime_t = self.sigma * 1 / (2*np.sqrt(path[i-1]))
                 path[i] = path[i - 1] + delta*mu_t + sigma_t * np.sqrt(delta) * W[i-1] + 1/2 * sigma_prime_t * sigma_t * delta*(W[i-1]**2-1)
         elif scheme == "Exact":
             for i in range(1,M+1):
-                k = 4 * self.kappa * self.theta / (self.sigma**2)
-                l = 4 * self.kappa * np.exp(-self.kappa * T_return[i]) / (self.sigma**2 * (1-np.exp(-self.kappa *T_return[i]))) * path[i-1]
-                factor = self.sigma**2 * (1 - np.exp(-self.kappa * T_return[i])) / (4*self.kappa)
+                k = 4 * kappa * theta / (self.sigma**2)
+                l = 4 * kappa * np.exp(-kappa * T_return[i]) / (self.sigma**2 * (1-np.exp(-kappa *T_return[i]))) * path[i-1]
+                factor = self.sigma**2 * (1 - np.exp(-kappa * T_return[i])) / (4*kappa)
                 path[i] = factor * ncx2.rvs(df = k, nc = l)
-        else: # in case of having to simulate all and only need last - if all simulations needed might get heavy:  
-            path1 = lambda0 # to include zero.
-            path2 = lambda0 # to include zero.
-            path3 = lambda0 # to include zero.      
-            for i in range(1,M+1):
-                path1 += delta*self.kappa*(self.theta - path1) + self.sigma * np.sqrt(path1) * np.sqrt(delta) * W[i-1]
-                path2 += delta*self.kappa*(self.theta - path2) + self.sigma * np.sqrt(path2) * np.sqrt(delta) * W[i-1] + 1/2 * self.sigma * 1 / (2*np.sqrt(path2))*self.sigma * np.sqrt(path2)*delta*(W[i-1]-1)
-            k = 4 * self.kappa * self.theta / (self.sigma**2)
-            l = 4 * self.kappa * np.exp(-self.kappa * T_return[-1]) / (self.sigma**2 * (1-np.exp(-self.kappa *T_return[-1]))) * lambda0
-            factor = self.sigma**2 * (1 - np.exp(-self.kappa * T_return[-1])) / (4*self.kappa)
-            path3 = factor * ncx2.rvs(df = k, nc = l)
-            path = np.array([path1,path2, path3])
 
         return T_return, path
     

@@ -230,6 +230,7 @@ def KalmanUnscentedFit(params, cir_params,t_obs, t_mat_grid, CDS,h):
             pred_Xn, pred_Pn = prediction_step(Xn,Pn,trans_map,Q_t, phi_0,phi_X)     
             if np.any((pred_Xn < 0)):
                 return 1e12 
+            
     return - log_likelihood
 
 @njit
