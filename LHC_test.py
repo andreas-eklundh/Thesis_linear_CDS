@@ -13,7 +13,7 @@ test_df = test_df.pivot(index = ['Date','Ticker'],
                         columns='Tenor',values = 'Par Spread').reset_index()
 # Test on subset data ownly to get very few obs. One large spread increase to test.
 #test_df = test_df[(test_df['Date']<'2021-01-01') & (test_df['Date']>='2019-06-01')]
-test_df = test_df[5::5]
+# test_df = test_df[5::5]
 
 # Function to convert tenors to months to same metric (so
 test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
@@ -21,9 +21,9 @@ t = np.array(test_df['Years'])
 # These are all available time points. 
 
 
-# mat_grid = np.array([1,2,3,4,5,7,10])
+mat_grid = np.array([1,3,5,7,10])
 # mat_grid = np.array([2,3,4,5,7,10])
-mat_grid = np.array([5]) # Matures in 5 years, but specific dates.
+#mat_grid = np.array([5]) # Matures in 5 years, but specific dates.
 t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
 
 # For a quarterly CDS, following effective payment dates.¨ (do actual calcs at some point)
@@ -43,7 +43,8 @@ t_mat_grid = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val,
 # This is the typical grid
 # CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']])
 # CDS_obs = np.array(test_df[['2Y','3Y','4Y','5Y','7Y','10Y']])
-CDS_obs = np.array(test_df[['5Y']]) 
+CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']])
+# CDS_obs = np.array(test_df[['5Y']]) 
 
 from Models.LHCModels.LHC_single import LHC_single
 #from Models.Extended.LHC_Temp import LHC_single
@@ -58,23 +59,17 @@ lhc = LHC_single( r=0.0252,delta=0.4,cds_tenor= 0.25 )
 # initialise guesses for params. 
 # set Y_dim=1, X_dim=1 to test remaining logic, X_dim>1 for general purposes.
 # Why? X_dim=1 easy to solve problem if using only one spread. 
-lhc.initialise_LHC(Y_dim=1,X_dim=1,rng=None)
+lhc.initialise_LHC(Y_dim=1,X_dim=2,X0=0.5,rng=None)
 
 ### TODO: Try to implement a totally basic exapmple CF 40.
 # lhc.optimize_params(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs)
 
 
 # Test several random points. 
-out_params= lhc.optimal_parameter_set(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs,n_restarts=1)
+out_params= lhc.optimal_parameter_set(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs,n_restarts=5)
 
 ## Should include a function for optimizing base on say 5 differetn random points or more.
 # And then take the best.
-# This is likely what they do in paper.
-
-#temp_param = lhc.flatten_params()
-
-#lhc.unflatten_params(np.array([0.5881308 , 0.89771373, 0.00151587, 0.28225612, 0.5871308 ]))
-
 
 import os
 
@@ -181,12 +176,26 @@ for k in strike_spreads:
         ax.plot(plot_grid,price, label=f"Price CDSO, n={n}")
         print(f"Done with n={n},k={k}")
     ax.set_xlabel("z")
-    ax.set_ylabel("CDSO price")
-    ax.set_title(f"Estimated CDSO price, k={k}")
+    ax.set_ylabel("Payoff")
+    ax.set_title(f"Estimated CDSO Payoff, k={k}")
     ax.legend()
     ax.legend()
     fig.tight_layout()
-    fig.savefig(os.path.join(save_path, f"CDSO_price_k_{k}.png"), dpi=150)
+    fig.savefig(os.path.join(save_path, f"CDSO_payofffunc_k_{k}.png"), dpi=150)
     plt.close(fig)
+
+
+## Calculate prices. Need sigma estimate in some way. 
+# Simulation price of CDS. Possible as known Sigma. Need to give X0 as argument.
+price_strikes = np.zeros(strike_spreads.shape[0])
+chi0 = np.append([Y[-1]],X[:,-1])
+# Set sigma to be 0.3
+P_params = np.array([1]*lhc.m + [1]*lhc.m +  [0.03]*lhc.m + [7e-5]  )
+for idx,k in enumerate(strike_spreads):
+    price_strikes[idx] = lhc.get_cdso_pric_MC(t=0,t0=t_start,t_M=T_option,
+                             strike=k, chi0=chi0, N=500,M=1000,P_params=P_params)
+
+print(f'CDSO prices: {price_strikes}')
+
 
 test = 1

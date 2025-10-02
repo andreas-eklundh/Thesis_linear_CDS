@@ -11,7 +11,7 @@ test_df = test_df.pivot(index = ['Date','Ticker'],
                         columns='Tenor',values = 'Par Spread').reset_index()
 # Test on subset data ownly to get very few obs. One large spread increase to test.
 #test_df = test_df[(test_df['Date']<'2021-01-01') & (test_df['Date']>='2019-06-01')]
-test_df = test_df[5::5]
+# test_df = test_df[5::5]
 
 # Function to convert tenors to months to same metric (so
 test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
@@ -53,7 +53,7 @@ save_path = f"./Results/DANBNK/"   # <--- change to your path
 fig, ax = plt.subplots(figsize=(10,6))
 ax.plot(t, Default_intensityLHCK , "-", alpha=0.7, color='green', label=f"LHC Kalman")
 ax.plot(t, Default_intensityLHC , "-", alpha=0.7, color='blue', label=f"LHC")
-ax.plot(t, XnCIR , "-", alpha=0.7, color='red', label=f"CIR Kalman")
+#ax.plot(t, XnCIR , "-", alpha=0.7, color='red', label=f"CIR Kalman")
 
 
 ax.set_xlabel("Time (years)")
@@ -71,7 +71,7 @@ plt.close(fig)
 fig, ax = plt.subplots(figsize=(10,6))
 ax.plot(t, ZnLHCK , "-", alpha=0.7, color='green', label=f"LHC Kalman")
 ax.plot(t, ZnLHC , "-", alpha=0.7, color='blue', label=f"LHC")
-ax.plot(t, ZnCIR , "-", alpha=0.7, color='red', label=f"CIR Kalman")
+#ax.plot(t, ZnCIR , "-", alpha=0.7, color='red', label=f"CIR Kalman")
 ax.plot(t, CDS_obs , "o", alpha=0.7, color='black', label=f"Observations")
 
 ax.grid()
@@ -90,7 +90,7 @@ YnCIR = np.exp(-np.cumsum(XnCIR*(t[1]-t[0]))) # only approximates
 fig, ax = plt.subplots(figsize=(10,6))
 ax.plot(t, YnLHCK , "-", alpha=0.7, color='green', label=f"LHC Kalman")
 ax.plot(t, YnLHC , "-", alpha=0.7, color='blue', label=f"LHC")
-ax.plot(t, YnCIR , "-", alpha=0.7, color='red', label=f"CIR Kalman")
+#ax.plot(t, YnCIR , "-", alpha=0.7, color='red', label=f"CIR Kalman")
 
 ax.grid()
 ax.set_xlabel("Time (years)")

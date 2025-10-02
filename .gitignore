@@ -7,3 +7,9 @@ venv/
 
 # Ignore logs
 *.log
+
+# Ignore pictures...
+*.png
+
+# Ignore txt files...
+*txt

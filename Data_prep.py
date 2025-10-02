@@ -52,7 +52,7 @@ for ticker in tickers:
     plt.tight_layout()
 
     # Save plot
-    plt.savefig(f"./Exploratory/{ticker}_convspread.png")
+    plt.savefig(f"./Spreads_obs/{ticker}_convspread.png")
     plt.close()
 
 

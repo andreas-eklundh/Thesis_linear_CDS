@@ -15,7 +15,9 @@ lhc = LHC(0.025,0.4,0.25)
 Y_dim,m = 1,2
 # Here, parameters are set already
 rng = np.random.default_rng(1000)
-lhc.initialise_LHC(Y_dim,m,rng=rng)
+X0 = 0.5
+chi0 = np.array([1] + [X0]*m)
+lhc.initialise_LHC(Y_dim,m,X0=X0,rng=rng)
 lhc.flatten_params()
 params = lhc.flatten_params()
 lhc.unflatten_params(params[:2*m+1])
@@ -28,16 +30,16 @@ print(lhc.kappa, lhc.theta,lhc.gamma1,lhc.kappa_p,lhc.theta_p,lhc.sigma, lhc.sig
 
 # Simulate. We are using an Euler discretization. 
 # Start at 0.5 also for aloowing for more jump op and down. Again, likly too large initial cov
-Chi0 = np.array([1]+[0.5]*m)
-T,M = 1, 500
-# Use same seed to reproduce same randomness. Two different BMs, tied by MPR now. Also simulate without problem
-T_path, chi_P = lhc.simul_latent_states(Chi0,T=T,M=M, measure='P',seed=1000)
-T_path, chi_Q = lhc.simul_latent_states(Chi0,T=T,M=M, measure='Q',seed=1001)
+T,M = 1, 100
+# Use same seed to reproduce same randomness.
+mat_grid = np.array([1,3,5,7,10]) # Typical maturity grid
+# mat_grid = np.array([5]) 
 
+n_mat = mat_grid.shape[0]
+T_path, chi_Q,chi_P = lhc.simul_latent_states(chi0=chi0,T=T,M=M,n_mat=n_mat,seed=1001)
 
 
 # Holld maturity to be 5
-mat_grid = np.array([5]) 
 t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + T_path[None, :])   # shape (len(T_M_grid), len(t_obs))
 mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
                         for i in range(0,int(np.max(t_mat_grid)+1))]).flatten()
@@ -72,11 +74,12 @@ print(np.min(CDS_simul),np.max(CDS_simul))
 # Reestimation of the Process. Try Kalman filter on the recreated CDS spreads.
 # Kalman automatically initiates at random. 
 optim_params,  Xn,Zn, Pn= lhc.run_n_kalmans(T_path, t_mat_grid, CDS_simul.T,n_restarts=1)
-out_params= lhc.optimal_parameter_set(t_obs=T_path,T_M_grid=t_mat_grid,CDS_obs=CDS_simul.T,n_restarts=1)
+out_params = lhc.optimal_parameter_set(t_obs=T_path,T_M_grid=t_mat_grid,CDS_obs=CDS_simul.T,n_restarts=1)
+# utilizing the previous vals
 X, Y, Z = lhc.get_states(T_path, t_mat_grid, CDS_simul.T)
 CDS_model = lhc.CDS_model(T_path, t_mat_grid, CDS_simul.T)
 
-
+np.set_printoptions(precision=4, suppress=True)  # fewer decimals, no scientific notation
 print(f'Optimal parameters, Kalman: {optim_params}')
 print(f'Optimal Parameters Filipovic {out_params}')
 print(f'Actual Parameters: {params_actual}')
@@ -89,22 +92,23 @@ color_cycle = plt.cm.tab10.colors
 # --- Latent states plots ---
 n_states = chi_Q.shape[1]  # total number of latent states
 
-for i in range(n_states):
+for i in range(0,n_states):
     fig, ax = plt.subplots(figsize=(10,4))
     
     # Custom name for the first latent state
     state_name = "Y / Survival Process" if i == 0 else f"X{i}"
     
-    # Plot simulated Q vs P
+    # Plot simulated Q vs P - only X
     ax.plot(T_path, chi_Q[:, i], "--", alpha=0.8, label=f"{state_name}, Q (sim)", color="blue")
     ax.plot(T_path, chi_P[:, i], "-", alpha=0.8, label=f"{state_name}, P (sim)", color="red")
     
     # Plot Kalman estimate
     ax.plot(T_path, Xn[:, i], "-", alpha=0.9, label=f"{state_name} (Kalman)", color="green")
-    
     # Optional: Filipovic solution if available
-    if i < X.shape[0]:
-        ax.plot(T_path, X[i, :], "-", alpha=0.9, label=f"{state_name} (Filipovic)", color="yellow")
+    if i == 0:
+        ax.plot(T_path, Y, "-", alpha=0.9, label=f"{state_name} (Filipovic)", color="yellow")
+    else:
+        ax.plot(T_path, X[i-1, :], "-", alpha=0.9, label=f"{state_name} (Filipovic)", color="yellow")
     
     ax.set_xlabel("Time (years)")
     ax.set_ylabel(state_name)
@@ -133,10 +137,7 @@ fig.savefig(os.path.join(save_path, "SimulLHC_CDS_Spreads.png"), dpi=150)
 plt.close(fig)
 
 
-
-
 #### CIR SIMULATION. ######
-
 kappa_cir,theta_cir,sigma_cir = 1.65e-01, 1.10e-01, 0.08
 kappa_p_cir,theta_p_cir, sigma_err_cir = 2.64e-01, 3.7e-01, 8.21e-05 # sigma error needs to be very small.
 params_cir = np.array([kappa_cir,theta_cir,sigma_cir,kappa_p_cir,theta_p_cir,sigma_err_cir])
@@ -149,9 +150,11 @@ cir.set_params(params_cir)
 # Simulate: 
 np.random.seed(11)
 # Set initial lambda to the one we would get in a LHC model.
-lambda0 = gamma1* Chi0[1] / Chi0[1]
+lambda0 = gamma1* 1 / X0
 # This is under Q 
-T_return,lambda_mil = cir.simulate_intensity(lambda0=lambda0,T=T,M=M,scheme="Milstein")
+T_return,lambda_mil_Q = cir.simulate_intensity(lambda0=lambda0,T=T,M=M,scheme="Milstein",measure='Q')
+T_return,lambda_mil_P = cir.simulate_intensity(lambda0=lambda0,T=T,M=M,scheme="Milstein", measure='P')
+
 # Estimate. 
 cir_n = CIR_Theta(cir.kappa,cir.theta,cir.sigma,
                         cir.kappa_p,cir.theta_p,
@@ -159,12 +162,12 @@ cir_n = CIR_Theta(cir.kappa,cir.theta,cir.sigma,
 
 CDS_cir = np.ones((t_mat_grid.T.shape))
 for i in range(t_mat_grid.shape[1]):
-    lambda_curr  = np.array([lambda_mil[i]])
+    lambda_curr  = np.array([lambda_mil_Q[i]])
     mat_curr = t_mat_grid[:,i]
     CDS_cir[i,:] = cds_spread(cir_n,lambda_curr,T_return[i],mat_curr)
 
 
-param_cir, Xn,Zn, Pn = cir.run_n_Kalman(T_return,t_mat_grid,CDS_cir,n_optim=5)
+param_cir, Xn,Zn, Pn = cir.run_n_Kalman(T_return,t_mat_grid,CDS_cir,n_optim=1)
 
 
 print(f'Optimal Parameters CIR {param_cir}')
@@ -176,7 +179,9 @@ color_cycle = plt.cm.tab10.colors
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,6), sharey=False)
 
-ax1.plot(T_return, lambda_mil, "-", alpha=0.7, label="Simulated X1 (CIR)", color="blue")
+ax1.plot(T_return, lambda_mil_Q, "-", alpha=0.7, label="Simulated X1 (CIR), Q", color="blue")
+ax1.plot(T_return, lambda_mil_P, "-", alpha=0.7, label="Simulated X1 (CIR), P", color="blue")
+
 ax1.plot(T_return, Xn[:,0], "--", alpha=0.9, label="Kalman Estimated X1", color="red")
 
 ax1.set_xlabel("Time (years)")

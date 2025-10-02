@@ -69,10 +69,17 @@ class ATSM():
 
 
         # Note revert T,0 to go backwoards in time?
-        ode_sol =  solve_ivp(fun=primes,  t_span=[0,T], y0=init_conds , t_eval=[T],
-                         method='RK45', rtol=1e-15, atol=1e-15)
-        self.beta, self.alpha =  ode_sol.y[:beta_0.shape[0]].flatten(), ode_sol.y[-1].item()
-
+        ode_sol = solve_ivp(
+            fun=primes,
+            t_span=[0, T[-1]],   # integrate from 0 to max maturity
+            y0=init_conds,
+            t_eval=T,            # evaluate at all maturities
+            method='RK45',
+            rtol=1e-06,
+            atol=1e-06
+        )
+        self.beta = ode_sol.y[:beta_0.shape[0], :]   # shape (n_beta, n_maturities)
+        self.alpha = ode_sol.y[-1, :]               # shape (n_maturities,)
 
     # The Laplace Transform
     def Laplace_Transform(self, X, w, T):
