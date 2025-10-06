@@ -57,7 +57,7 @@ lhc = LHC_single( r=0.0252,delta=0.4,cds_tenor= 0.25 )
 # initialise guesses for params. 
 # set Y_dim=1, X_dim=1 to test remaining logic, X_dim>1 for general purposes.
 # Why? X_dim=1 easy to solve problem if using only one spread. 
-lhc.initialise_LHC(Y_dim=1,X_dim=1,X0=0.6,rng=None)
+lhc.initialise_LHC(Y_dim=1,X_dim=2,X0=0.6,rng=None)
 
 ### TODO: Try to implement a totally basic exapmple CF 40.
 
@@ -226,7 +226,7 @@ price_strikes = np.zeros(strike_spreads.shape[0])
 chi0 = np.append([Yn[-1]],Xn[-1,:])
 for idx,k in enumerate(strike_spreads):
     price_strikes[idx] = lhc.get_cdso_pric_MC(t=0,t0=t_start,t_M=T_option,
-                             strike=k, X0=chi0,N=500,M=1000)
+                             strike=k, chi0=chi0,N=500,M=1000)
 
 print(f'CDSO prices: {price_strikes}')
 

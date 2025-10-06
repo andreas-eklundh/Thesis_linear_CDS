@@ -12,7 +12,7 @@ from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity
 r = 0.0252
 delta = 0.4
 tenor = 0.25
-X_dim = 1
+X_dim = 2
 
 cir = CIRIntensity(r,delta,tenor,X_dim)
 x0 = np.array([0])
@@ -41,8 +41,8 @@ default_prob = data['default_prob']
 
 # Find corresponding entries in t_mats_plots.
 # Note, we need to retrieve the cols/rows corresponding to the dates for each day. 
-# mat_grid = np.array([1,3,5,7,10])
-mat_grid = np.array([1] ) #,5,7,10])
+mat_grid = np.array([1,3,5,7,10])
+# mat_grid = np.array([1] ) #,5,7,10])
 
 # The running working maturities
 t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
@@ -57,10 +57,13 @@ Gamma_kalman = Gamma[:,np.isin(t_mats_plots, mat_grid).flatten()]
 # params, Xn,Zn,Pn = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=1000)
 
 # Ttry with several restarts. 
-params, Xn,Zn,Pn = cir.run_n_kalman(t,t_mat_grid,Y=Gamma_kalman,base_seed=1000,n_restarts=3)
+params, Xn,Zn,Pn = cir.run_n_kalman(t,t_mat_grid,Y=Gamma_kalman,base_seed=1000,n_restarts=1)
 
+# Set new optimal parameters too.
+cir.set_params(params)
 # default_prob_model= np.exp(Zn)
 
+# Save values:
 
 # With Params in place, we can utilize CIR class to do pricing, simulations etc. 
 CDS_cir = np.zeros(survival_kalman.shape)
@@ -133,6 +136,7 @@ plt.close(fig)
 Yn = np.exp(-np.cumsum(default_intensity*(t[1]-t[0]))) # only approximates
 
 state_name = f"S(t)"
+fig, ax = plt.subplots(figsize=(10,4))
 
 ax.plot(t,Yn, "--", alpha=0.8, label=f"{state_name}", color="blue")
 
@@ -144,6 +148,16 @@ ax.legend()
 fig.tight_layout()
 fig.savefig(os.path.join(save_path, f"CIR_survival_{i}.png"), dpi=150)
 plt.close(fig)
+
+
+np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Kalman_resultsCIR.npz",
+        final_param=params,
+        Xn=Xn,
+        Zn=Zn,
+        Pn = Pn,
+        Yn = Yn,
+        default_intensity = default_intensity,
+        CDS_cir = CDS_cir)
 
 
 test = 1

@@ -1,6 +1,6 @@
 import numpy as np 
 from scipy.optimize import minimize, NonlinearConstraint 
-from scipy.stats import norm, ncx2, gamma, expon
+from scipy.stats import norm, ncx2, gamma, expon, uniform
 from scipy.integrate import solve_ivp 
 from scipy.linalg import expm 
 from scipy.optimize import lsq_linear 
@@ -219,6 +219,18 @@ def cds_fun_lin(lhc, chi_m1, t,t0, t_mat_grid):
         
     return result
 
+## Try to run on value of CDS instead.
+@njit
+def cds_value(lhc, t,t0, t_mat_grid,CDS_grid):
+    result = np.zeros((t_mat_grid.shape[0],int(lhc.Y_dim+ lhc.m)), dtype=np.float64)
+    for i in range(t_mat_grid.shape[0]):
+        # Pass a scalar from the array X
+        prem = psi_prem(lhc,t,t0,t_mat_grid[i])
+        prot = psi_prot(lhc,t,t0,t_mat_grid[i])
+        result[i,:] = prot - CDS_grid[i] * prem
+        
+    return result
+
 #USCENTED IMPLEMENTATION
 @njit
 def update_step(X_pred, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k,
@@ -324,10 +336,13 @@ def prediction_step(Xn, Pn, h, Q_k,
 
 # standard kalman with previous in denom.
 @njit
-def update_step_lin(X_pred,X_pred_m1, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
+# def update_step_lin(X_pred,X_pred_m1, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
+def update_step_lin(X_pred, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
+
     L = X_pred.shape[0]
     # Step 3: Mean prediction, covariance, Kalman Gain etc.
-    H = h(lhc, X_pred_m1, t_obs,t0, t_mats)
+    # H = h(lhc, X_pred_m1, t_obs,t0, t_mats)
+    H = h(lhc, t_obs,t0, t_mats, CDS_k) # Using (14) instead
     mu_k = H @ X_pred
 
     # covariance
@@ -336,7 +351,8 @@ def update_step_lin(X_pred,X_pred_m1, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS
 
     # Step 4: Compute Kalman Gain, filtered mean state, covariance.
     K_k = P_pred @ H.T @ S_k_inv
-    vn = (CDS_k - mu_k)
+    # vn = (CDS_k - mu_k) # In Linear Approx instance
+    vn = (np.zeros(CDS_k.shape) - mu_k) # In CDS Value instanse
     m_k = X_pred + K_k @ vn
     P_k = P_pred - K_k @ S_k @ K_k.T
 
@@ -345,15 +361,14 @@ def update_step_lin(X_pred,X_pred_m1, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS
 # Prediction step:
 @njit
 def prediction_step_lin(Xn, Pn, h, Q_k):
-    
     # Step 3: Mean prediction and cov predition.
-    m_k = h @ Xn # h(lhc, chis[:,i], t_obs,t0, t_mats)
-
+    m_k = h @ Xn 
 
     # covariance - 
     # Should be zero at first, then fill non Y cols. Same as done in Q_k
     P_k = np.zeros(shape = Q_k.shape)
     P_k[1:,1:] = h[1:,1:] @ Pn[1:,1:] @ h.T[1:,1:] + Q_k[1:,1:]
+    # P_k = h @ Pn @ h.T + Q_k
 
     return m_k, P_k
 
@@ -465,10 +480,11 @@ def kalmanfilter_out(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
     P_state = np.array([chi_0[i] * (chi_0[0] - chi_0[i]) for i in range(1,chi_0.shape[0]) ])
     Sigma_prod = (Q_k @ np.diag(np.sqrt(P_state))) @ (Q_k @ np.diag(np.sqrt(P_state))).T 
     P0 = Sigma_prod.copy()
-    _, P0[1:,1:] = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+    # _, P0[1:,1:] = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
     # P0[1:,1:], _ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
 
     # _, P0 = get_cond_var(A_trans, Sigma_prod, Delta)
+    P0,_ = get_cond_var(A_trans, Sigma_prod, Delta)
 
 
     Pn = np.zeros((n_obs,P0.shape[0],P0.shape[0]))
@@ -489,8 +505,11 @@ def kalmanfilter_out(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
         if n == 0:
             pred_Xm1 = chi_0.copy() #Xn[0,0] = chi_0[0] # Force to be 1 survival process
 
-        Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Xm1,pred_Pn,cds_fun_lin,R_k,
+        # Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Xm1,pred_Pn,cds_fun_lin,R_k,
+        #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+        Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Pn,cds_value,R_k,
                                                             t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+       
         # Use prediction in the actual CDS calc.
         Zn[n,:] = cds_fun(lhc_q,Xn[n,:],t_obs[n],t0[n],T_M_grid[:,n])
         pred_Xm1 = pred_Xn.copy()
@@ -508,8 +527,8 @@ def kalmanfilter_out(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
             # NOTE: WOULD HAVE TO LOOK INTO THIS
             Sigma_prod = (Q_k @ np.diag(np.sqrt(P_state))) @ (Q_k @ np.diag(np.sqrt(P_state))).T 
             Q_k = Sigma_prod.copy()
-            Q_k[1:,1:], _ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
-            # Q_k, _ = get_cond_var(A_trans, Sigma_prod, Delta)
+            # Q_k[1:,1:], _ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+            Q_k, _ = get_cond_var(A_trans, Sigma_prod, Delta)
 
             # As we use left endpoints of X and Y, we can compute the similar expressions to Christiensen.
 
@@ -529,7 +548,7 @@ def kalmanfilter_out(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
 # One kalman filter for optimizing and one for outputting.
 @njit
 def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
-    print(params)
+    # print(params)
     # Define the parameters already to be able to look over them
     gamma1 = params[2*lhc_p.m]
     params_p = params[2*lhc_p.m+1:]
@@ -542,30 +561,30 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
         return 1e12  # infeasible, huge loss
 
     # 2. Custom constraints
-    for i in range(lhc_p.m):
-        g1 = theta[i] * kappa[i] # - sigma[i]**2/2 
-    # g1 = theta[-1] * kappa[-1]
-        if g1 < 0:
-            return 1e12
+    # for i in range(lhc_p.m):
+    #     g1 = theta[i] * kappa[i] # - sigma[i]**2/2 
+    g1 = theta[-1] * kappa[-1]  - sigma[-1]**2/2 
+    if g1 < 0:
+        return 1e12
 
     # Equivalent of the above.
     # g2 = theta_p[-1] * kappa_p[-1] 
     # if g2 < 0:
     #     return 1e12
+    # for i in range(lhc_p.m):
+    #     g2 = theta_p[i] * kappa_p[i] # - sigma[i]**2/2 
+    g2 = theta_p[-1] * kappa_p[-1] - sigma[-1]**2/2 
+    if g2 < 0:
+        return 1e12
+
+
     for i in range(lhc_p.m):
-        g2 = theta_p[i] * kappa_p[i] # - sigma[i]**2/2 
-    # g1 = theta[-1] * kappa[-1]
-        if g2 < 0:
+        g3 = gamma1 - kappa[i] + kappa[i] * theta[i] + sigma[i]**2/2
+        if g3 > 0:   
             return 1e12
 
-
     for i in range(lhc_p.m):
-        g3 = gamma1 - kappa[i] + kappa[i] * theta[i] #+ sigma[i]/2
-        if g3 > 0:   # since you wanted  -(...) >= 0 earlier
-            return 1e12
-
-    for i in range(lhc_p.m):
-        g4 = gamma1 - kappa_p[i] + kappa_p[i] * theta_p[i] # + sigma[i]/2
+        g4 = gamma1 - kappa_p[i] + kappa_p[i] * theta_p[i]  + sigma[i]**2/2
         if g4 > 0:
             return 1e12
 
@@ -604,10 +623,11 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
     Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T 
     # Just an attemt, not to keep.
     P0 = Sigma_prod.copy()
-    _, P0[1:,1:] = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+    # _, P0[1:,1:] = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
     # P0[1:,1:],_ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
 
     # _, P0 = get_cond_var(A_trans, Sigma_prod, Delta)
+    P0, _ = get_cond_var(A_trans, Sigma_prod, Delta)
 
     # Store predictions. 
     pred_Xn = np.zeros(L)
@@ -626,12 +646,13 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
         if n == 0:
             pred_Xm1 = chi_0.copy() #Xn[0,0] = chi_0[0] # Force to be 1 survival process
 
-        Zn, vn,S_k, Xn, Pn = update_step_lin(pred_Xn,pred_Xm1,pred_Pn,cds_fun_lin,R_k,
+        # Zn, vn,S_k, Xn, Pn = update_step_lin(pred_Xn,pred_Xm1,pred_Pn,cds_fun_lin,R_k,
+        #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+        Zn, vn,S_k, Xn, Pn = update_step_lin(pred_Xn,pred_Pn,cds_value,R_k,
                                                             t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+       
         # add additional check until parameters are figured out
         if (np.any(Xn[0] - Xn<0)|np.any(Xn<0) |np.any(Xn>1)):
-            Zn, vn,S_k, Xn, Pn = update_step_lin(pred_Xn,pred_Xm1,pred_Pn,cds_fun_lin,R_k,
-                                                        t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
             return 1e12
         pred_Xm1 = pred_Xn.copy()
         if n == 0:
@@ -659,9 +680,9 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
 
             Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T 
             Q_k = Sigma_prod.copy()
-            Q_k[1:,1:], _ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+            # Q_k[1:,1:], _ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
             
-            # Q_k, _ = get_cond_var(A_trans, Sigma_prod, Delta)
+            Q_k, _ = get_cond_var(A_trans, Sigma_prod, Delta)
             # Then update the predictions:
             f_map = mat_exp_approx(A_trans,Delta) # @ Xn
             # f_map = expm(A_trans * Delta) # @ Xn
@@ -770,8 +791,10 @@ class LHC_single():
         self.X0 = X0
         self.a = np.ones((self.Y_dim,1))                                      # Y dim is 1 for LHC
         # Set inital values. Need to comply with (38)
-        self.kappa = rng.uniform(0.2, 0.9, size=(X_dim,))       # Kappa given 
-        self.gamma1 = np.array([np.min(self.kappa) - 1e-1])       # gamma1 strictly pos.
+        self.gamma1 = rng.uniform(0.2, 0.5, size=(Y_dim,))       # gamma1 strictly pos.
+        self.kappa = rng.uniform(self.gamma1, 0.9, size=(X_dim,))       # Kappa given 
+        # self.gamma1 = rng.uniform(0.05, 0.3, size=(Y_dim,))       # gamma1 strictly pos.
+        
         self.theta = np.zeros(X_dim)
 
         for i in range(0,X_dim):
@@ -872,17 +895,17 @@ class LHC_single():
         return self.psi_prot(t, t0, t_M) - k * self.psi_prem(t, t0, t_M)
 
 
-    def CDS_model(self,t_obs, T_M_grid, CDS_obs):
+    def CDS_model(self,t_obs, T_M_grid, CDS_obs, X=None,Y=None):
         # Get latent states.
         t0 = t_obs
-        mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
-                                for i in range(0,int(np.max(t0)+1))]).flatten()
-        # Ensure mat_actual is sorted
-        mat_actual_sorted = np.sort(mat_actual)
+        # mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
+        #                         for i in range(0,int(np.max(t0)+1))]).flatten()
+        # # Ensure mat_actual is sorted
+        # mat_actual_sorted = np.sort(mat_actual)
 
-        # For each element in t_mat_grid, find the smallest mat_actual that is >= element
-        t0 = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
-                                        for val in t0.flatten()]).reshape(t0.shape)
+        # # For each element in t_mat_grid, find the smallest mat_actual that is >= element
+        # t0 = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
+        #                                 for val in t0.flatten()]).reshape(t0.shape)
 
         # Actual maturity dates. Say at March 20, Jun
 
@@ -895,7 +918,8 @@ class LHC_single():
 
         # New get states functionality:
         # Numba code to generate matrices to solve for.
-        X,Y,Z = get_states(lhc, t_obs, T_M_grid, CDS_obs,self.X0)
+        if (X is None) | (Y is None) :
+            X,Y,Z = get_states(lhc, t_obs, T_M_grid, CDS_obs,self.X0)
 
         #print('Done Getting Z,Y,X')
         state_vec = np.vstack([Y, X])
@@ -1061,7 +1085,7 @@ class LHC_single():
             ### New stuff: All the ones needed here e.g. sigma, sigma_Err
             sigma_i = rng.uniform(0.1, 0.15, size=(X_dim,))       # Kappa given 
             # Sigma error is likely smalll.
-            sigma_err = rng.uniform(0.00001, 0.0001, size=(Y_dim,))       # Kappa given 
+            sigma_err = rng.uniform(0.001, 0.01, size=(Y_dim,))       # Kappa given 
 
             r = self.r
             Y_dim = self.Y_dim
@@ -1089,14 +1113,14 @@ class LHC_single():
 
     def get_kalman_params(self,t_obs, T_M_grid, CDS_obs,x0,lhc_p):
         t0 = t_obs
-        mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
-                                for i in range(0,int(np.max(t0)+1))]).flatten()
-        # Ensure mat_actual is sorted
-        mat_actual_sorted = np.sort(mat_actual)
+        # mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
+        #                         for i in range(0,int(np.max(t0)+1))]).flatten()
+        # # Ensure mat_actual is sorted
+        # mat_actual_sorted = np.sort(mat_actual)
 
-        # For each element in t_mat_grid, find the smallest mat_actual that is >= element
-        t0 = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
-                                        for val in t0.flatten()]).reshape(t0.shape)
+        # # For each element in t_mat_grid, find the smallest mat_actual that is >= element
+        # t0 = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
+        #                                 for val in t0.flatten()]).reshape(t0.shape)
 
 
         result = minimize(
@@ -1135,7 +1159,7 @@ class LHC_single():
             # Get P Parameters /initialise
             lhc_p = self.build_P_params(params=None, gamma1=None,rng=rng)
             # Set the error to be the Stddeviation of CDS_obs
-            self.sigma_err = np.std(CDS_obs).flatten()
+            #self.sigma_err = np.std(CDS_obs).flatten()
             # Flatten for scipy. 
             x0_Q = self.flatten_params()
 
@@ -1156,6 +1180,7 @@ class LHC_single():
                 print(f"New optimal parameters at iteration {i+1}.")
                 current_objective = self.kalman_obj
                 out_params, Xn_out,Zn_out, Pn_out = optim_params, Xn,Zn, Pn
+                self.unflatten_params(out_params[:x0_Q.shape[0]])
 
         # Set new optimal parameters. 
         return  out_params,  Xn_out,Zn_out, Pn_out
@@ -1276,25 +1301,23 @@ class LHC_single():
         for i in range(N):
             # Get Latent states. Simulate to time of inception of CDS. Calculate only for 1 maturity.
             T_return, X_Q, X_P = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed)
-            default_intensity = self.default_intensity(X_Q[:,1:].T,X_Q[:,0])
-            # Compute prob of default at time t0
-            deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
-            default_intensity_mid = np.array([(default_intensity[i]+default_intensity[i-1])/2 for i in range(1,default_intensity.shape[0])])
-            Lambda = np.cumsum(default_intensity_mid*deltas)
-            # survival_process = np.exp(-np.cumsum(lambda_t[1:]*deltas)) # only approximates
-            # default_process = 1-survival_process
-            # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
-            E = expon.rvs()
-            if Lambda[-1] >= E:
+            S = X_Q[:,0]
+            # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
+            U = uniform.rvs()
+            # If survival falls below U at any points, default happened prior to t0
+            if np.any(S <= U):
                 prices[i] = 0
             # Else - begin to compute prices as no default
             else: 
                 latent_end = X_Q[-1,:]
-                Value_CDS = self.psi_cds(t, t0, t_M, strike) @ latent_end
+                # Value is assumed to be exactly at inception date first date of contract
+                Value_CDS = self.psi_cds(t0, t0, t_M, strike) @ latent_end
+                # Problem: This being below zero. 
                 # Discount back: 
                 # Note still an option, so only enter if positive. 
                 prices[i] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0)
-
+            
+            seed += 1
         price_MC = np.mean(prices)
 
         return price_MC

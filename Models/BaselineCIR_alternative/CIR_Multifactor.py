@@ -29,13 +29,13 @@ class CIRIntensity():
             else:
                 rng = np.random.default_rng(seed)  # independent each time
 
-            self.kappa = rng.uniform(0.2, 0.7, size=(X_dim,))
-            self.theta =  rng.uniform(0.01, 0.06, size=(X_dim,))
-            self.sigma =  rng.uniform(0.01, 0.1, size=(X_dim,))
+            self.kappa = rng.uniform(0.02, 0.1, size=(X_dim,))
+            self.theta =  rng.uniform(0.001, 0.01, size=(X_dim,))
+            self.sigma =  rng.uniform(0.001, 0.01, size=(X_dim,))
             # initialise all positive.
             self.kappa_p = self.kappa # just initialise these clsoe to each other
             self.theta_p = self.theta # just initialise these clsoe to each other
-            self.sigma_err = np.random.uniform(0.001, 0.0099, size=(1,))
+            self.sigma_err = np.random.uniform(0.001, 0.01, size=(1,))
 
 
         else:
@@ -140,17 +140,16 @@ class CIRIntensity():
         x0 = np.zeros(self.X_dim) # This is how it is supposed to be...
         alpha,beta = self.cir_solution(params,x0,T,rho=1)
         # Return value of Laplace Transform - Specific vals of w->ZCB price.
-        return np.exp(alpha + beta @ lambda_t)
+        return np.exp(alpha + beta @ lambda_t).flatten()
 
     ##### Section on all the pricing stuff.
     # Coupon leg 'easy' should be similar to a ATSM 
     def calc_coupon_leg(self,params,t,t_mat, lambda_t):
         I = np.zeros(1)
-        t_grid_len = int(np.round(np.round(t_mat - t) / self.tenor)) + 1
-        t_grid = np.zeros(t_grid_len+1)
-        for i in range(t_grid_len+1):
+        t_grid_len = int(np.round((t_mat - t) / self.tenor).item()) + 1
+        t_grid = np.zeros(t_grid_len)
+        for i in range(t_grid_len):
             t_grid[i] = t + i * self.tenor
-
         for t_idx in range(1, len(t_grid)):
             expectation = self.Laplace_Transform(params, lambda_t, t_grid[t_idx] - t)
             I += (t_grid[t_idx]-t_grid[t_idx-1]) * np.exp(-self.r * (t_grid[t_idx] - t)) * expectation
@@ -175,9 +174,9 @@ class CIRIntensity():
 
     def calc_accrual_leg(self,params,t,t_mat, lambda_t):
         x = np.zeros(self.X_dim)
-        t_grid_len = int(np.round(np.round(t_mat - t) / self.tenor)) + 1
-        t_grid = np.zeros(t_grid_len+1)
-        for i in range(t_grid_len+1):
+        t_grid_len = int(np.round((t_mat - t) / self.tenor).item()) + 1
+        t_grid = np.zeros(t_grid_len)
+        for i in range(t_grid_len):
             t_grid[i] = t + i * self.tenor
         integrand = lambda u: (np.exp(-self.r * (u-t)) * self._get_default_grid(u,t_grid) *  
             (self.cir_derivatives(params,x,u-t)[0] + 
@@ -226,7 +225,11 @@ class CIRIntensity():
 
         # covariance
         S_k = A @ P_pred @ A.T + R_k
-        S_k_inv = np.linalg.inv(S_k)
+        try:
+            S_k_inv = np.linalg.inv(S_k)
+        except:
+            # Pseudo inverse if not working.
+            S_k_inv = np.linalg.pinv(S_k)
 
         # Step 4: Compute Kalman Gain, filtered mean state, covariance.
         K_k = P_pred @ A.T @ S_k_inv
@@ -331,9 +334,10 @@ class CIRIntensity():
         for n in range(0,n_obs):
             # UPDATE STEP
             Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
-            # punish hashly if Xn below zero. 
-            # if np.any(Xn < 0 ) & (result == False):
-            #     return 1e12
+            # punish hashly if Xn below zero (mainly i). 
+            if np.any(Xn < 0 ) & (result == False):
+                Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
+                return 1e12
             if result == True:
                 Xn_out[n,:] = Xn
                 Zn_out[n,:] = A @ Xn + a
@@ -365,6 +369,8 @@ class CIRIntensity():
                 Delta = t_obs[n+1] - t_obs[n]
                 pred_Xn, pred_Pn = self.Prediction_step(Xn,Pn,phi_X,phi_0,Q_t)
 
+                # Placeholder for previous values to test instabilitiy:
+                Xn_prev = Xn.copy()
         if result == True:
             return Xn_out,Zn_out, Pn_out
         else:
@@ -379,7 +385,7 @@ class CIRIntensity():
         sigma     = params[2*d:3*d]
         kappa_p   = params[3*d:4*d]
         theta_p   = params[4*d:5*d]
-        sigma_err = params[5*d:6*d]
+        sigma_err = params[-1]
 
         # latent CIR Feller: 2*kappa*theta - sigma^2 >= 0
         feller_latent = 2*kappa*theta - sigma**2  # vector length d
@@ -401,26 +407,25 @@ class CIRIntensity():
         # Try a different optimizer than nelder mead
         # d = self.X_dim  # number of factors
 
-        # n_params = 6*d  # adjust to actual number of params
+        # n_params = 5*d + 1  # adjust to actual number of params
         # lower_bounds = 1e-8 * np.ones(n_params)  # small positive number to avoid zero
         # upper_bounds = np.full(n_params, np.inf)
 
         # bounds = Bounds(lower_bounds, upper_bounds)
         # nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
 
-
         # res = minimize(
-        #     fun = self.Kalman,
-        #     x0 = x0,
+        #     fun=self.Kalman,
+        #     x0=x0,
         #     method='trust-constr',
-        #     args = (t_obs, t_mat_grid, Y,False),
-        #     bounds = bounds,
+        #     args=(t_obs, t_mat_grid, Y, False),
+        #     bounds=bounds,
         #     constraints=[nonlinear_constraint],
-        #     tol = {
-        #             'maxiter':500 
-        #           }
+        #     tol=1e-9,  # or whatever tolerance you need
+        #     options={
+        #         'maxiter': 100
+        #     }
         # )
-
         res = minimize(
             fun = self.Kalman,
             x0 = x0,
@@ -429,7 +434,7 @@ class CIRIntensity():
             options = {
                 "xatol": 1e-6,
                 "fatol": 1e-6,
-                "maxiter": 500,
+                "maxiter": 1000,
                 "disp": True
             }
         )
@@ -455,7 +460,7 @@ class CIRIntensity():
                 out_params = optim_params
                 Xn_out,Zn_out,Pn_out = self.Kalman(out_params,t_obs, t_mat_grid, Y,True)
 
-            return out_params, Xn,Zn,Pn
+        return out_params, Xn_out,Zn_out,Pn_out
             
     # Simulation will likely also be th eway to go about expression in Filipovic (tedious)
     def simulate_intensity(self, lambda0,T,M,scheme, measure):
@@ -492,6 +497,38 @@ class CIRIntensity():
     
 
 
+    # MC pricing. 
+    def get_cdso_pric_MC(self,params,t,t0,t_M,strike,lambda0,N,M):
+        # N prices are comuted and averaged MC
+        prices = np.zeros(shape = N)
+        for i in range(N):
+            # Get default intensity process. 
+            T_return,lambda_t = self.simulate_intensity(lambda0,t0,M,scheme = 'Milstein',measure='Q')
+            # Compute prob of default at time t0
+            deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
+            Lambda = np.cumsum(lambda_t[1:]*deltas)
+            # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
+            E = expon.rvs()
+            if Lambda[-1] >= E:
+                prices[i] = 0
+            # Else - begin to compute prices. 
+            else: 
+                lambda_end = np.array([lambda_t[-1]])
+                prot = self.calc_protection_leg(params, t0, t_M, lambda_end)
+                # Quick fix due to way its written
+                I1 = self.calc_coupon_leg(params, t0, t_M, lambda_end)
+                I2 = self.calc_accrual_leg(params, t0, t_M, lambda_end)
+
+                Value_CDS = prot - strike * (I1 + I2)
+
+                # Discount back: 
+                # Note still an option, so only enter if positive. 
+
+                prices[i] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0)
+
+        price_MC = np.mean(prices)
+
+        return price_MC
 
 
 
