@@ -57,25 +57,27 @@ lhc = LHC_single( r=0.0252,delta=0.4,cds_tenor= 0.25 )
 # initialise guesses for params. 
 # set Y_dim=1, X_dim=1 to test remaining logic, X_dim>1 for general purposes.
 # Why? X_dim=1 easy to solve problem if using only one spread. 
-lhc.initialise_LHC(Y_dim=1,X_dim=2,X0=0.6,rng=None)
+lhc.initialise_LHC(Y_dim=1,X_dim=2,X0=0.5,rng=None)
 
 ### TODO: Try to implement a totally basic exapmple CF 40.
 
 # Test several random points. 
-optim_params,  Xn,Zn, Pn= lhc.run_n_kalmans(t, t_mat_grid, CDS_obs,n_restarts=5)
+optim_params,  Xn,Zn, Pn= lhc.run_n_kalmans(t, t_mat_grid, CDS_obs,base_seed = 206,n_restarts=5)
+Xn_kalman,Yn_kalman = lhc.kalman_X_Y(t,Xn)
+
 print(f'Optimal Paramerters {optim_params}')
 kappa, theta, gamma1 = optim_params[:lhc.m],optim_params[lhc.m:2*lhc.m], optim_params[2*lhc.m]
 
 default_intensity = lhc.default_intensity(Xn[:,1:].T,Xn[:,0])
-mpr,girsanov = lhc.get_MPR(optim_params,Xn[:,0],Xn[:,1:].T,CDS_obs)
+#mpr,girsanov = lhc.get_MPR(optim_params,Xn[:,0],Xn[:,1:].T,CDS_obs)
 
 np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Kalman_resultsLHC.npz",
          final_param=optim_params,
-         Xn=Xn[:,1:],
-         Yn=Xn[:,0],
+         Xn=Xn_kalman,
+         Yn=Yn_kalman,
          Default_intensity = default_intensity,
-         CDS_model = Zn,
-         MPR = mpr)
+         CDS_model = Zn) #,
+#         MPR = mpr)
 
 
 data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/kalman_resultsLHC.npz")
@@ -84,7 +86,7 @@ Xn = data["Xn"]
 Yn=data["Yn"]
 Zn = data["CDS_model"]
 default_intensity = data["Default_intensity"]
-mpr = data["MPR"]
+# mpr = data["MPR"]
 
 
 mpr,girsanov = lhc.get_MPR(optim_params,Yn,Xn.T,CDS_obs)

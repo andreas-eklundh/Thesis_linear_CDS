@@ -31,10 +31,10 @@ class CIRIntensity():
 
             self.kappa = rng.uniform(0.02, 0.1, size=(X_dim,))
             self.theta =  rng.uniform(0.001, 0.01, size=(X_dim,))
-            self.sigma =  rng.uniform(0.001, 0.01, size=(X_dim,))
+            self.sigma =  rng.uniform(0.001, np.sqrt(2*self.kappa*self.theta), size=(X_dim,))
             # initialise all positive.
-            self.kappa_p = self.kappa # just initialise these clsoe to each other
-            self.theta_p = self.theta # just initialise these clsoe to each other
+            self.kappa_p = self.kappa + 0.1 # just initialise these clsoe to each other
+            self.theta_p = self.theta + 0.01 # just initialise these clsoe to each other
             self.sigma_err = np.random.uniform(0.001, 0.01, size=(1,))
 
 
@@ -45,7 +45,7 @@ class CIRIntensity():
     def unpack_params(self,params):
         X_dim = self.X_dim
         kappa, theta, sigma = params[:X_dim],params[X_dim:2*X_dim],params[2*X_dim:3*X_dim]
-        kappa_p, theta_p,sigma_err = params[3*X_dim:4*X_dim],params[4*X_dim:5*X_dim], params[-1]
+        kappa_p, theta_p,sigma_err = params[3*X_dim:4*X_dim],params[4*X_dim:5*X_dim], np.array([params[-1]])
         return kappa,theta,sigma,kappa_p,theta_p,sigma_err
     #### Solve affine equations.
 
@@ -151,7 +151,7 @@ class CIRIntensity():
         for i in range(t_grid_len):
             t_grid[i] = t + i * self.tenor
         for t_idx in range(1, len(t_grid)):
-            expectation = self.Laplace_Transform(params, lambda_t, t_grid[t_idx] - t)
+            expectation = self.Laplace_Transform(params, lambda_t.T, t_grid[t_idx] - t)
             I += (t_grid[t_idx]-t_grid[t_idx-1]) * np.exp(-self.r * (t_grid[t_idx] - t)) * expectation
         return I
 
@@ -180,8 +180,8 @@ class CIRIntensity():
             t_grid[i] = t + i * self.tenor
         integrand = lambda u: (np.exp(-self.r * (u-t)) * self._get_default_grid(u,t_grid) *  
             (self.cir_derivatives(params,x,u-t)[0] + 
-            self.cir_derivatives(params,x,u-t)[1] @ lambda_t) *
-            self.Laplace_Transform(params,lambda_t, u - t)
+            self.cir_derivatives(params,x,u-t)[1] @ lambda_t.T) *
+            self.Laplace_Transform(params,lambda_t.T, u - t)
         )
 
         Ai_val, _ = quad(integrand,t,t_mat,epsabs=1e-9, epsrel=1e-9)
@@ -192,8 +192,8 @@ class CIRIntensity():
         x = np.zeros(self.X_dim)
 
         integrand = lambda u: ((1- self.delta)*np.exp(-self.r * (u-t)) * (self.cir_derivatives(params,x,u-t)[0] + 
-            self.cir_derivatives(params,x,u-t)[1] @ lambda_t)*
-            self.Laplace_Transform(params,lambda_t, u - t)
+            self.cir_derivatives(params,x,u-t)[1] @ lambda_t.T)*
+            self.Laplace_Transform(params,lambda_t.T, u - t)
             )
         prot_val, _ = quad(integrand,t,t_mat,epsabs=1e-9, epsrel=1e-9)
 
@@ -296,8 +296,8 @@ class CIRIntensity():
         if np.any(feller_val < 0):
             return 1e12
 
-        n_obs = Y.shape[0]
-        n_mat = Y.shape[1]
+        n_obs = t_mat_grid.shape[1]
+        n_mat = t_mat_grid.shape[0]
 
         Sigma = (np.identity(n_mat) * sigma_err**2)
 
@@ -328,16 +328,17 @@ class CIRIntensity():
         kappa_P_diag = np.identity(self.X_dim) * kappa_p
 
         # To speed up, solve ricatti equations. Will be time homogenous.
-        # Solve Ricatti Equations. Might move inside loop later.
+        # Solve Ricatti Equations. Might move inside loop later - MUCH FASTER OUT HERE, IF SAME DIST APPROX.
+        # THIS WILL LIKELY DO.
         a,A =  self.cir_solution(params,x0 = x0_zcb,T = t_mat_grid[:,0]- t_obs[0])
         a,A = -a,-A
         for n in range(0,n_obs):
             # UPDATE STEP
             Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
             # punish hashly if Xn below zero (mainly i). 
-            if np.any(Xn < 0 ) & (result == False):
-                Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
-                return 1e12
+            # if np.any(Xn < 0 ) & (result == False):
+            #     # Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
+            #     return 1e12
             if result == True:
                 Xn_out[n,:] = Xn
                 Zn_out[n,:] = A @ Xn + a
@@ -364,13 +365,9 @@ class CIRIntensity():
                         Xn * sigma**2 * (np.exp(-kappa_p * Delta) - np.exp(-2*kappa_p * Delta))/ kappa_p)
                 Q_t = ( np.identity(self.X_dim) * Q_t).reshape((self.X_dim,self.X_dim))
 
-                # Sigma_prod = np.identity(self.X_dim) * sigma**2 * Xn
-                # Q_t,_ = self.get_cond_var(kappa_P_diag,Sigma_prod,Delta)
                 Delta = t_obs[n+1] - t_obs[n]
                 pred_Xn, pred_Pn = self.Prediction_step(Xn,Pn,phi_X,phi_0,Q_t)
 
-                # Placeholder for previous values to test instabilitiy:
-                Xn_prev = Xn.copy()
         if result == True:
             return Xn_out,Zn_out, Pn_out
         else:
@@ -441,9 +438,9 @@ class CIRIntensity():
         params = res.x
         self.kalman_obj  = res.fun
         # Run and return solution
-        Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
+        #Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
 
-        return params , Xn,Zn,Pn
+        return params #, Xn,Zn,Pn
     
     def run_n_kalman(self, t_obs,t_mat_grid,Y,base_seed=1000,n_restarts=5):
         # Define grid of values. 
@@ -451,19 +448,21 @@ class CIRIntensity():
         for i in range(n_restarts):
             print(f"Optimization {i+1}")
             # Test several random points. 
-            optim_params, Xn,Zn,Pn  = self.run_kalman_filter(t_obs,t_mat_grid, Y,seed=base_seed+i)
+            optim_params = self.run_kalman_filter(t_obs,t_mat_grid, Y,seed=base_seed+i)
             # Test new constraints
 
             if (self.kalman_obj < current_objective):
                 print(f"New optimal parameters at iteration {i+1}.")
                 current_objective = self.kalman_obj
                 out_params = optim_params
+                # Assuming we do get anything for optimizing.
                 Xn_out,Zn_out,Pn_out = self.Kalman(out_params,t_obs, t_mat_grid, Y,True)
 
         return out_params, Xn_out,Zn_out,Pn_out
             
     # Simulation will likely also be th eway to go about expression in Filipovic (tedious)
     def simulate_intensity(self, lambda0,T,M,scheme, measure):
+        # TODO: Make possible to simulate in several dim
         if measure == 'P':
             theta = self.theta_p
             kappa = self.kappa_p
@@ -472,21 +471,27 @@ class CIRIntensity():
             kappa = self.kappa
         # Do baseline calculations
         delta = T / M
+        X_dim = lambda0.shape[0]
         T_return = np.array([0.00001] + [delta*k for k in range(1,M+1)])
-        path = np.full(shape = M + 1, fill_value=lambda0) # to include zero.
-        W = norm.rvs(size = M) # simulate at beginning - faster!
+        path = (np.ones(shape = (X_dim,M + 1))* lambda0.reshape((X_dim,1)) ).T # to include zero.
+        W = norm.rvs(size = (X_dim*M)).reshape((M,X_dim)) # simulate at beginning - faster!
+        # Creat Matrices
+        kappa_mat = np.diag(kappa.flatten())
+        theta_vec = theta
+        sigma_mat = np.diag(self.sigma.flatten())
         if scheme == "Euler":
             for i in range(1,M+1):
-                mu_t = kappa*(theta - path[i - 1])
-                sigma_t = self.sigma * np.sqrt(path[i-1])
-                path[i] = path[i - 1] + delta*mu_t + sigma_t * np.sqrt(delta) * W[i-1]
+                mu_t = kappa_mat @ (theta_vec - path[i - 1,:])
+                sigma_t = sigma_mat *  np.sqrt(path[i-1,:])
+                path[i,:] = path[i - 1,:] + delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]
         elif scheme == "Milstein":
             for i in range(1,M+1):
-                mu_t = kappa*(theta - path[i - 1])
-                sigma_t = self.sigma * np.sqrt(path[i-1])
-                sigma_prime_t = self.sigma * 1 / (2*np.sqrt(path[i-1]))
-                path[i] = path[i - 1] + delta*mu_t + sigma_t * np.sqrt(delta) * W[i-1] + 1/2 * sigma_prime_t * sigma_t * delta*(W[i-1]**2-1)
+                mu_t = kappa_mat @ (theta_vec - path[i - 1,:])
+                sigma_t = sigma_mat *  np.sqrt(path[i-1])
+                #sigma_prime_t = 
+                path[i,:] = path[i - 1,:] + delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]+ 1/2 * sigma_prime_t * sigma_t * delta*(W[i-1]**2-1)
         elif scheme == "Exact":
+            # TODO: Correct this.
             for i in range(1,M+1):
                 k = 4 * kappa * theta / (self.sigma**2)
                 l = 4 * kappa * np.exp(-kappa * T_return[i]) / (self.sigma**2 * (1-np.exp(-kappa *T_return[i]))) * path[i-1]

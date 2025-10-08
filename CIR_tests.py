@@ -29,6 +29,7 @@ test_df = pd.read_excel("./Data/test_data.xlsx")
 test_df = test_df.pivot(index = ['Date','Ticker'],
                         columns='Tenor',values = 'Par Spread').reset_index()
 # Test on subset data ownly to get very few obs. One large spread increase to test.
+test_df = test_df[::5]
 test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
 t = np.array(test_df['Years']) # t of the CDS.
 CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']])
@@ -41,23 +42,23 @@ default_prob = data['default_prob']
 
 # Find corresponding entries in t_mats_plots.
 # Note, we need to retrieve the cols/rows corresponding to the dates for each day. 
-mat_grid = np.array([1,3,5,7,10])
-# mat_grid = np.array([1] ) #,5,7,10])
+# mat_grid = np.array([1,3,5,7,10])
+mat_grid = np.array([1,5,10] ) #,5,7,10])
 
 # The running working maturities
 t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
 
 t_mats_plots_kalman = t_mats_plots[np.isin(t_mats_plots,mat_grid).flatten()]
 
-survival_kalman = survival[:,np.isin(t_mats_plots, mat_grid).flatten()]
-Gamma_kalman = Gamma[:,np.isin(t_mats_plots, mat_grid).flatten()]
+survival_kalman = survival[::5,np.isin(t_mats_plots, mat_grid).flatten()]
+Gamma_kalman = Gamma[::5,np.isin(t_mats_plots, mat_grid).flatten()]
 
 
 # Negative process. Multiply by -1 everywhere. Let A and a get these too. 
 # params, Xn,Zn,Pn = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=1000)
 
 # Ttry with several restarts. 
-params, Xn,Zn,Pn = cir.run_n_kalman(t,t_mat_grid,Y=Gamma_kalman,base_seed=1000,n_restarts=1)
+params, Xn,Zn,Pn = cir.run_n_kalman(t,t_mat_grid,Y=Gamma_kalman,base_seed=1000,n_restarts=3)
 
 # Set new optimal parameters too.
 cir.set_params(params)

@@ -9,8 +9,6 @@ from numba.experimental import jitclass
 from scipy.integrate import quad
 import copy
 from scipy.linalg import sqrtm
-from scipy.optimize import brentq
-
 
 
 spec = [
@@ -233,6 +231,108 @@ def cds_value(lhc, t,t0, t_mat_grid,CDS_grid):
         
     return result
 
+#USCENTED IMPLEMENTATION
+@njit
+def update_step(X_pred, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k,
+                     alpha=1e-03, kappa_u=0.0, beta=2.0):
+    L = X_pred.shape[0]
+    kappa_u = 3 - L
+    lam = alpha**2 * (L + kappa_u) - L
+    c = L + lam
+
+    # sigma points
+    s = np.sqrt(c)* matrix_sqrt(P_pred) 
+    # 1. Form sigma points
+    chis = np.ones((L,2*L+1))
+    chis[:,0] = X_pred
+    for i in range(1,L+1):
+        chis[:,i] = X_pred + s[:,i-1]
+        chis[:,L+i] = X_pred - s[:,i-1]
+
+    # weights
+    wm = np.zeros(2*L+1)
+    wm[0] = lam / (lam+L)
+    wc = np.zeros(2*L+1)
+    wc[0] = lam / (lam+L) + (1-alpha**2+beta)
+    for i in range(1, 2*L+1):
+        wm[i] = wc[i] = 1 / (2*(lam+L))
+
+    # Step 2: Measurement predictions
+    Zi = np.zeros((2*L+1, t_mats.shape[0]))
+    for i in range(2*L+1):
+        Zi[i,:] = h(lhc, chis[:,i], t_obs,t0, t_mats)
+
+    # Step 3: Mean prediction, covariance, Kalman Gain etc.
+    mu_k = np.zeros_like(Zi[0])
+    for i in range(2*L+1):
+        mu_k += wm[i] *  Zi[i,:]
+
+    # covariance
+    S_k = R_k.copy()
+    for i in range(2*L+1):
+        diff = Zi[i,:] - mu_k
+        S_k += wc[i] * np.outer(diff, diff)
+
+    S_k_inv = np.linalg.inv(S_k)
+
+    C_k = np.zeros(shape = (L,t_mats.shape[0]))
+    # Shaping here in paper is not completely obvious. 
+    for i in range(2*L+1):
+        C_k += wc[i] * np.outer((chis[:,i] - X_pred),(Zi[i,:] - mu_k))
+
+
+    # Step 4: Compute Kalman Gain, filtered mean state, covariance.
+    K_k = C_k @ S_k_inv
+    vn = (CDS_k - mu_k)
+    m_k = X_pred + K_k @ vn
+    P_k = P_pred - K_k @ S_k @ K_k.T
+
+    return mu_k, vn,S_k, m_k, P_k
+
+# Prediction step:
+@njit
+def prediction_step(Xn, Pn, h, Q_k,
+                     alpha=1e-03, kappa_u=0.0, beta=2.0):
+    L = Xn.shape[0]
+    kappa_u = 3 - L
+    lam = alpha**2 * (L + kappa_u) - L
+    c = L + lam
+
+    # sigma points
+    s = np.sqrt(c)* matrix_sqrt(Pn) 
+    # 1. Form sigma points
+    chis = np.ones((L,2*L+1))
+    chis[:,0] = Xn
+    for i in range(1,L+1):
+        chis[:,i] = Xn + s[:,i-1]
+        chis[:,L+i] = Xn - s[:,i-1]
+
+    # weights
+    wm = np.zeros(2*L+1)
+    wm[0] = lam / (lam+L)
+    wc = np.zeros(2*L+1)
+    wc[0] = lam / (lam+L) + (1-alpha**2+beta)
+    for i in range(1, 2*L+1):
+        wm[i]  = wc[i] = 1 / (2*(lam+L))
+
+    # Step 2: Measurement predictions
+    Xi = np.zeros((2*L+1, L))
+    for i in range(2*L+1):
+        Xi[i,:] = h @ chis[:,i] # h(lhc, chis[:,i], t_obs,t0, t_mats)
+
+    # Step 3: Mean prediction and cov predition.
+    m_k = np.zeros_like(Xi[0])
+    for i in range(2*L+1):
+        m_k += wm[i] *  Xi[i,:]
+    
+    # covariance
+    P_k = Q_k.copy()
+    for i in range(2*L+1):
+        diff = Xi[i,:] - m_k
+        P_k += wc[i] * np.outer(diff, diff)
+
+    return m_k, P_k
+
 
 # standard kalman with previous in denom.
 @njit
@@ -243,18 +343,14 @@ def update_step_lin(X_pred, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
     # Step 3: Mean prediction, covariance, Kalman Gain etc.
     # H = h(lhc, X_pred_m1, t_obs,t0, t_mats)
     H = h(lhc, t_obs,t0, t_mats, CDS_k) # Using (14) instead
-    mu_k = H[:,1:] @ X_pred + H[:,0]
+    mu_k = H @ X_pred
 
     # covariance
-    S_k = H[:,1:] @ P_pred @ H[:,1:].T + R_k
-    det_S = np.linalg.det(S_k)
-    if abs(det_S) < 1e-12:
-        S_k_inv = np.linalg.pinv(S_k)
-    else:
-        S_k_inv = np.linalg.inv(S_k)
+    S_k = H @ P_pred @ H.T + R_k
+    S_k_inv = np.linalg.inv(S_k)
 
     # Step 4: Compute Kalman Gain, filtered mean state, covariance.
-    K_k = P_pred @ H[:,1:].T @ S_k_inv
+    K_k = P_pred @ H.T @ S_k_inv
     # vn = (CDS_k - mu_k) # In Linear Approx instance
     vn = (np.zeros(CDS_k.shape) - mu_k) # In CDS Value instanse
     m_k = X_pred + K_k @ vn
@@ -264,15 +360,15 @@ def update_step_lin(X_pred, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
 
 # Prediction step:
 @njit
-def prediction_step_lin(Xn, Pn, Matrix,const, Q_k):
+def prediction_step_lin(Xn, Pn, h, Q_k):
     # Step 3: Mean prediction and cov predition.
-    m_k = Matrix @ Xn + const 
+    m_k = h @ Xn 
 
     # covariance - 
     # Should be zero at first, then fill non Y cols. Same as done in Q_k
     P_k = np.zeros(shape = Q_k.shape)
     # P_k[1:,1:] = h[1:,1:] @ Pn[1:,1:] @ h.T[1:,1:] + Q_k[1:,1:]
-    P_k = Matrix @ Pn @ Matrix.T + Q_k
+    P_k = h @ Pn @ h.T + Q_k
 
     return m_k, P_k
 
@@ -344,48 +440,262 @@ def build_matrices(lhc,sigma_i,sigma_err,n_mat):
 
 ### Actual kalman filters.
 
+# One kalman filter for optimizing and one for outputting.
+@njit
+def kalmanfilter_out(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
+    # Get initial guesses.
+    n_obs = CDS_obs.shape[0]
+    n_mat = CDS_obs.shape[1]
 
-# @njit
-# def drift_term(Xn_prev,lhc_p,Delta):
-#     Matrix = np.ones(Xn_prev.shape[0]) + ((lhc_p.beta + np.identity(lhc_p.beta.shape[0])*(-lhc_p.gamma @ Xn_prev)))*Delta
-#     const = lhc_p.b.flatten() * Delta
-#     return Matrix, const
+    # Build Q params.
+    kappa, theta, gamma1 = params[:lhc_p.m],params[lhc_p.m:2*lhc_p.m], params[2*lhc_p.m]
+    r = lhc_p.r
+    Y_dim = lhc_p.Y_dim
+    delta = lhc_p.delta
+    tenor = lhc_p.tenor 
+    lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
+
+    # Buld P params:
+    params_p = params[2*lhc_p.m+1:]
+    lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,gamma1,lhc_p)
+
+    # Rebuild lhc q set again as needed in later computations.
+    lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
+
+    Delta = t_obs[1] - t_obs[0] # Only apprx for now. Move to loop maybe.
+
+    # Only A_trans utilzes new params
+    A_trans,Q_k,R_k = build_matrices(lhc_p,sigma,sigma_err,n_mat)
+
+    L = int(lhc_p.Y_dim + lhc_p.m)
+
+    # Just to set Xn,Pn, but not needed to be thse vals.
+    # Don't know these values. Just arbitrary guessing. on X. Remainder calc.
+    Y0 = np.array([1])
+    X0 = np.ones(shape=(lhc_q.m,)) * X0
+
+    chi_0 = np.empty(Y0.shape[0] + X0.size, dtype=np.float64)
+    chi_0[:Y0.shape[0]] = Y0
+    chi_0[Y0.shape[0]:] = X0.ravel()
+    P_state = np.array([chi_0[i] * (chi_0[0] - chi_0[i]) for i in range(1,chi_0.shape[0]) ])
+    Sigma_prod = (Q_k @ np.diag(np.sqrt(P_state))) @ (Q_k @ np.diag(np.sqrt(P_state))).T 
+    P0 = Sigma_prod.copy()
+    # _, P0[1:,1:] = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+    # P0[1:,1:], _ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+
+    # _, P0 = get_cond_var(A_trans, Sigma_prod, Delta)
+    P0,_ = get_cond_var(A_trans, Sigma_prod, Delta)
+
+
+    Pn = np.zeros((n_obs,P0.shape[0],P0.shape[0]))
+    Xn = np.zeros((n_obs,L))
+    Zn = np.zeros((n_obs,n_mat))
+    Xn[0,:] = chi_0
+    # Initial Predictions of means and cov
+    pred_Xn =  mat_exp_approx(A_trans,Delta) @ chi_0
+    # pred_Xn =  expm(A_trans * Delta) @ chi_0
+
+    pred_Pn = P0
+
+    for n in range(0,n_obs):
+        # UPDATE STEP
+        # Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step(pred_Xn,pred_Pn,cds_fun,R_k,
+        #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+        # Linear Kalman
+        if n == 0:
+            pred_Xm1 = chi_0.copy() #Xn[0,0] = chi_0[0] # Force to be 1 survival process
+
+        # Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Xm1,pred_Pn,cds_fun_lin,R_k,
+        #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+        Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Pn,cds_value,R_k,
+                                                            t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+       
+        # Use prediction in the actual CDS calc.
+        Zn[n,:] = cds_fun(lhc_q,Xn[n,:],t_obs[n],t0[n],T_M_grid[:,n])
+        pred_Xm1 = pred_Xn.copy()
+
+        if (n < n_obs - 1): # Not sensible to predict further.
+            Delta = t_obs[n+1] - t_obs[n] # Only apprx for now. Move to loop maybe.
+
+            # Create arrays based on obs. 
+            A_trans,Q_k,R_k  = build_matrices(lhc_p,sigma,sigma_err,n_mat)
+
+            # Qt needs modification in according to being stat edependent.
+            P_state = np.array([Xn[n,i] * (Xn[n,0] - Xn[n,i]) for i in range(1,chi_0.shape[0]) ])
+
+            # Above is SigmaSigma.Tin the articles notation.
+            # NOTE: WOULD HAVE TO LOOK INTO THIS
+            Sigma_prod = (Q_k @ np.diag(np.sqrt(P_state))) @ (Q_k @ np.diag(np.sqrt(P_state))).T 
+            Q_k = Sigma_prod.copy()
+            # Q_k[1:,1:], _ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+            Q_k, _ = get_cond_var(A_trans, Sigma_prod, Delta)
+
+            # As we use left endpoints of X and Y, we can compute the similar expressions to Christiensen.
+
+            # Then update the predictions:
+            f_map = mat_exp_approx(A_trans,Delta) # @ Xn
+            # f_map = expm(A_trans * Delta) # @ Xn
+
+            # Get point updates and update Z predictions
+            #pred_Xn, pred_Pn = prediction_step(Xn[n,:],Pn[n,:,:],f_map,Q_k)     
+            # Lin version:
+            pred_Xn, pred_Pn = prediction_step_lin(Xn[n,:],Pn[n,:,:],f_map,Q_k)     
+
+    return Xn,Zn, Pn
+
+
+
+# One kalman filter for optimizing and one for outputting.
+@njit
+def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
+    # print(params)
+    # Define the parameters already to be able to look over them
+    gamma1 = params[2*lhc_p.m]
+    params_p = params[2*lhc_p.m+1:]
+    lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,gamma1,lhc_p)
+    params_q = params[:2*lhc_p.m+1]
+    kappa, theta, gamma1 = params_q[:lhc_p.m],params_q[lhc_p.m:2*lhc_p.m], params_q[-1]
+    # --------- HARD CONSTRAINT CHECKS ---------
+    # 1. Positivity - must hold for all params. We use hard constraint from paper.
+    if np.any(params <= 0):
+        return 1e12  # infeasible, huge loss
+
+    # 2. Custom constraints
+    # for i in range(lhc_p.m):
+    #     g1 = theta[i] * kappa[i] # - sigma[i]**2/2 
+    g1 = theta[-1] * kappa[-1]  - sigma[-1]**2/2 
+    if g1 < 0:
+        return 1e12
+
+    # Equivalent of the above.
+    # g2 = theta_p[-1] * kappa_p[-1] 
+    # if g2 < 0:
+    #     return 1e12
+    # for i in range(lhc_p.m):
+    #     g2 = theta_p[i] * kappa_p[i] # - sigma[i]**2/2 
+    g2 = theta_p[-1] * kappa_p[-1] - sigma[-1]**2/2 
+    if g2 < 0:
+        return 1e12
+
+
+    for i in range(lhc_p.m):
+        g3 = gamma1 - kappa[i] + kappa[i] * theta[i] + sigma[i]**2/2
+        if g3 > 0:   
+            return 1e12
+
+    for i in range(lhc_p.m):
+        g4 = gamma1 - kappa_p[i] + kappa_p[i] * theta_p[i]  + sigma[i]**2/2
+        if g4 > 0:
+            return 1e12
+
+    # Get initial guesses.
+    n_obs = CDS_obs.shape[0]
+    n_mat = CDS_obs.shape[1]
+
+    # Build Q params.
+    r = lhc_p.r
+    Y_dim = lhc_p.Y_dim
+    delta = lhc_p.delta
+    tenor = lhc_p.tenor 
+    lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
+
+    # Rebuild p again as needed later on.
+    lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
+
+    Delta = t_obs[1] - t_obs[0] # Only apprx for now. Move to loop maybe.
+
+    # Only A_trans utilzes new params
+    A_trans,Sigma,R_k = build_matrices(lhc_p,sigma,sigma_err,n_mat)
+
+    L = int(lhc_p.Y_dim + lhc_p.m)
+    log_likelihood = 0
+
+    # Just to set Xn,Pn, but not needed to be thse vals.
+    # Don't know these values. Just arbitrary guessing. on X. Remainder calc.
+    # NOTE: SHOULD BE INITIALIZED AT EXPECTED VAL.
+    Y0 = np.array([1])
+    X0 = np.ones(shape=(lhc_q.m,)) * X0
+    chi_0 = np.empty(Y0.shape[0] + X0.size, dtype=np.float64)
+    chi_0[:Y0.shape[0]] = Y0
+    chi_0[Y0.shape[0]:] = X0.ravel()
+    P_state = np.array([chi_0[i] * (chi_0[0] - chi_0[i]) for i in range(1,chi_0.shape[0]) ])
+    # Initial Cov Prediction.
+    Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T 
+    # Just an attemt, not to keep.
+    P0 = Sigma_prod.copy()
+    # _, P0[1:,1:] = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+    # P0[1:,1:],_ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+
+    # _, P0 = get_cond_var(A_trans, Sigma_prod, Delta)
+    P0, _ = get_cond_var(A_trans, Sigma_prod, Delta)
+
+    # Store predictions. 
+    pred_Xn = np.zeros(L)
+    pred_Pn = np.zeros((P0.shape[0],P0.shape[0]))
+
+    # Initial Predictions of means and cov
+    pred_Xn = mat_exp_approx(A_trans,Delta) @ chi_0
+    # pred_Xn = expm(A_trans * Delta) @ chi_0
+    pred_Pn = P0 
+
+    # Run algo. 
+    for n in range(0,n_obs):
+        # UPDATE STEP
+        # Zn, vn,S_k, Xn, Pn = update_step(pred_Xn,pred_Pn,cds_fun,R_k,t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+        #lin version.
+        if n == 0:
+            pred_Xm1 = chi_0.copy() #Xn[0,0] = chi_0[0] # Force to be 1 survival process
+
+        # Zn, vn,S_k, Xn, Pn = update_step_lin(pred_Xn,pred_Xm1,pred_Pn,cds_fun_lin,R_k,
+        #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+        Zn, vn,S_k, Xn, Pn = update_step_lin(pred_Xn,pred_Pn,cds_value,R_k,
+                                                            t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+       
+        # add additional check until parameters are figured out
+        if (np.any(Xn[0] - Xn<0)|np.any(Xn<0) |np.any(Xn>1)):
+            return 1e12
+        pred_Xm1 = pred_Xn.copy()
+        if n == 0:
+            Xn[0] = chi_0[0] # Force to be 1 survival process
+
+
+        # Update log likelihood.            
+        det_S = np.abs(np.linalg.det(S_k))
+        try: 
+            S_inv = np.linalg.inv(S_k) 
+        except:
+            S_inv = np.linalg.pinv(S_k)
+
+        log_likelihood += - 0.5 * (S_k.shape[0] * np.log(2*np.pi) + np.log(det_S) +
+                                    vn.T @ S_inv @ vn
+        )
+
+        if (n < n_obs - 1): # Not sensible to predict further.
+            Delta = t_obs[n+1] - t_obs[n] # Only apprx for now. Move to loop maybe.
+            # Create arrays based on obs. 
+            #A_trans,Sigma,R_k  = build_matrices(lhc_p,sigma,sigma_err,n_mat)
+
+            # Qt needs modification in according to being stat edependent.
+            P_state = np.array([Xn[i] * (Xn[0] - Xn[i]) for i in range(1,Xn.shape[0]) ])
+
+            Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T 
+            Q_k = Sigma_prod.copy()
+            # Q_k[1:,1:], _ = get_cond_var(A_trans[1:,1:], Sigma_prod[1:,1:], Delta)
+            
+            Q_k, _ = get_cond_var(A_trans, Sigma_prod, Delta)
+            # Then update the predictions:
+            f_map = mat_exp_approx(A_trans,Delta) # @ Xn
+            # f_map = expm(A_trans * Delta) # @ Xn
+
+            # Get point updates and update Z predictions
+            # pred_Xn, pred_Pn = prediction_step(Xn,Pn,f_map,Q_k)     
+            # linear version
+            pred_Xn, pred_Pn = prediction_step_lin(Xn,Pn,f_map,Q_k)
+    return - log_likelihood 
+
+
 
 @njit
-def drift_term(Xn,lhc_p,Delta):
-    Matrix = Xn + ((lhc_p.beta + np.identity(lhc_p.beta.shape[0])*(-lhc_p.gamma @ Xn))@ Xn)*Delta
-    const = lhc_p.b.flatten() * Delta
-    return Matrix + const
-
-# Drift derivative.
-# @njit
-# def drift_deriv_term(Xn,lhc_p,Delta):
-#     # Matrix = (np.ones(lhc_p.beta.shape[0]) + 
-#     #           ((lhc_p.beta @ np.ones(lhc_p.beta.shape[1]) + 
-#     #             (-lhc_p.gamma @ Xn) * np.identity(lhc_p.beta.shape[0]) @ np.ones(lhc_p.beta.shape[0])+ 
-#     #             (-lhc_p.gamma) * np.identity(lhc_p.beta.shape[0]) @ Xn))*Delta)
-#     Matrix = (np.identity(lhc_p.beta.shape[0]) + 
-#               (lhc_p.beta @ np.ones(lhc_p.beta.shape[1]) + 
-#                 (-lhc_p.gamma @ Xn*2) * np.identity(lhc_p.beta.shape[0]) @ np.ones(lhc_p.beta.shape[0]))
-#                 *Delta)
-#     return Matrix
-@njit
-def drift_deriv_term(Xn, lhc_p, Delta):
-    x = Xn.reshape(-1)
-    B = lhc_p.beta
-    g = lhc_p.gamma.flatten()   # ensure 1D
-    n = x.size
-
-    s = g @ x                    # scalar g^T x
-    outer_xg = np.outer(x, g)    # x g^T
-
-    J = np.eye(n) + Delta * (B - (s * np.eye(n) + outer_xg))
-    return J
-
-
-
-
-@njit 
 def matrix_sqrt(A):
     # Thanks to https://stackoverflow.com/questions/71232192/efficient-matrix-square-root-of-large-symmetric-positive-semidefinite-matrix-in
     D, V = np.linalg.eig(A)
@@ -799,181 +1109,7 @@ class LHC_single():
 
         return lhc
 
-    # Get notmalized drifft stuff.
-    def solve_mu1(self,kappa, theta, gamma1):
-        m = len(kappa)
 
-        def f(mu1):
-            prod = 1.0
-            for j in range(m):
-                prod *= kappa[j] * theta[j] / (mu1 * gamma1 - kappa[j])
-            return ((-1)**m) * prod - mu1
-
-        # Solve only for admissible range
-        return brentq(f, 1e-6, 1.0-1e-6)
-
-    def compute_stationary(self,kappa, theta, m, gamma1, mu1):
-        mu_process = np.zeros(m)
-        for i in range(m-1, -1, -1):
-            sign = (-1)**(m - (i+1) + 1)
-            prod = 1.0
-            for j in range(i, m):
-                prod *= kappa[j] * theta[j] / (mu1 * gamma1 - kappa[j])
-            mu_process[i] = sign * prod
-        return mu_process
-
-
-    # One kalman filter for optimizing and one for outputting.
-
-    def kalmanfilter_opt(self,params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
-        print(params)
-        # Define the parameters already to be able to look over them
-        gamma1 = params[2*lhc_p.m]
-        params_p = params[2*lhc_p.m+1:]
-        lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,gamma1,lhc_p)
-        params_q = params[:2*lhc_p.m+1]
-        kappa, theta, gamma1 = params_q[:lhc_p.m],params_q[lhc_p.m:2*lhc_p.m], params_q[-1]
-
-        # Get initial guesses.
-        n_obs = CDS_obs.shape[0]
-        n_mat = CDS_obs.shape[1]
-
-        # Build Q params.
-        r = lhc_p.r
-        Y_dim = lhc_p.Y_dim
-        delta = lhc_p.delta
-        tenor = lhc_p.tenor 
-        lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
-
-        # Rebuild p again as needed later on.
-        lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
-
-        Delta = t_obs[1] - t_obs[0] # Only apprx for now. Move to loop maybe.
-
-        # Only A_trans utilzes new params
-        A_trans,Sigma,R_k = build_matrices(lhc_p,sigma,sigma_err,n_mat)
-
-        L = int(lhc_p.m)
-        log_likelihood = 0
-
-        # Just to set Xn,Pn, but not needed to be thse vals.
-        # Don't know these values. Just arbitrary guessing. on X. Remainder calc.
-        # NOTE: SHOULD BE INITIALIZED AT EXPECTED VAL.
-        Y0 = np.array([1])
-        X0 = np.ones(shape=(lhc_q.m,)) * X0
-        Z0 = np.ones(Y0.size+X0.size, dtype=np.float64)
-        Z0[Y0.size:] = X0.ravel()/ Y0
-
-        # Store predictions. 
-        pred_Xn = np.zeros(L)
-        pred_Pn = np.zeros((X0.shape[0],X0.shape[0]))
-        Xn = np.zeros((n_obs,L))
-        Zn = np.zeros((n_obs,n_mat))
-        Pn = np.zeros((n_obs,L,L))
-        # Initial Predictions of means and cov
-        # Only criteria on mu1 - mu1 < k/kappa. Set to theta
-        mu1 = self.solve_mu1(kappa_p, theta_p, gamma1)
-        mu = self.compute_stationary(kappa_p,theta_p,lhc_q.m,gamma1,mu1= mu1)
-        pred_Xn = drift_term(mu,lhc_p,Delta) #mu
-        # Z0[1:] + (lhc_p.b.flatten() + (lhc_p.beta + np.identity(lhc_p.beta.shape[0]) * (-lhc_p.gamma @ Z0[1:])) @ Z0[1:])*Delta
-        # Just set the covariance guess to the innovated one.
-        P_state = np.array([mu[i] * (1 - mu[i]) for i in range(0,mu.shape[0]) ])
-        # Initial Cov Prediction.Z0
-        # Sigma = Sigma[1:,:]
-        Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T 
-        # Just an attemt, not to keep.
-        P0 = Sigma_prod.copy()
-        pred_Pn = P0[1:,1:] 
-
-        # pred_Xn = drift_term(Z0[1:],lhc_p,Delta)
-        # P_cov = drift_deriv_term(Z0[1:],lhc_p,Delta)
-        # pred_Pn =  P0[1:,1:] 
-        # Run algo. 
-        for n in range(0,n_obs):
-            Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Pn,cds_value,R_k,
-                                                                t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
-            Xn_extended = np.append([1],Xn[n,:])
-            Zn[n,:] =  cds_fun(lhc_q,Xn_extended,t_obs[n],t0[n],T_M_grid[:,n])
-
-            # add additional check until parameters are figured out
-            if (np.any(Xn<0) |np.any(Xn>1)):
-                return 1e12,Xn, Zn, Pn 
-
-            # Update log likelihood.            
-            det_S = np.abs(np.linalg.det(S_k))
-            try: 
-                S_inv = np.linalg.inv(S_k) 
-            except:
-                S_inv = np.linalg.pinv(S_k)
-
-            log_likelihood += - 0.5 * (S_k.shape[0] * np.log(2*np.pi) + np.log(det_S) +
-                                        vn.T @ S_inv @ vn
-            )
-
-            if (n < n_obs - 1): # Not sensible to predict further.
-                Delta = t_obs[n+1] - t_obs[n] # Only apprx for now. Move to loop maybe.
-                # Qt needs modification in according to being stat edependent.
-                P_state = np.array([Xn[n,i] * (1 - Xn[n,i]) for i in range(0,Xn.shape[1]) ])
-                Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T 
-                Q_k = Sigma_prod[1:,1:].copy() * Delta
-                
-                # Then update the predictions:
-                # linear version
-                # Do prediction directly, no function
-                # pred_Xn = drift_term(Xn[n,:],lhc_p,Delta) 
-                # pred_Xn_prev = pred_Xn # previous one at this point
-                Xn_prev = Xn[n-1,:]
-                if n == 0:
-                    Xn_prev = pred_Xn # only sensible guess in this case
-                # Taylor approximate the transition. 
-                pred_Xn = drift_term(Xn_prev,lhc_p,Delta)+(
-                    drift_deriv_term(Xn_prev,lhc_p,Delta)@ (Xn[n,:]-Xn_prev))
-                
-                P_cov = drift_deriv_term(Xn[n,:],lhc_p,Delta)
-                pred_Pn =  P_cov @ Pn[n,:,:] @ P_cov.T + Q_k
-
-                # Straight euler.
-                # Matrix,const = drift_term(Xn_prev,lhc_p,Delta)
-                # pred_Xn, pred_Pn = prediction_step_lin(Xn[n,:],Pn[n,:,:],Matrix,const,Q_k)
-
-        return - log_likelihood, Xn, Zn, Pn 
-
-    def kalman_wrapper(self,params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0):
-            # Define the parameters already to be able to look over them
-        gamma1 = params[2*lhc_p.m]
-        params_p = params[2*lhc_p.m+1:]
-        lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,gamma1,lhc_p)
-        params_q = params[:2*lhc_p.m+1]
-        kappa, theta, gamma1 = params_q[:lhc_p.m],params_q[lhc_p.m:2*lhc_p.m], params_q[-1]
-
-            # --------- HARD CONSTRAINT CHECKS ---------
-        # 1. Positivity - must hold for all params. We use hard constraint from paper.
-        if np.any(params <= 0):
-            return 1e12  # infeasible, huge loss
-
-        # 2. Custom constraints
-
-        g1 = theta[-1] * kappa[-1]  - sigma[-1]**2/2 
-        if g1 < 0:
-            return 1e12
-
-        g2 = theta_p[-1] * kappa_p[-1]  - sigma[-1]**2/2 
-        if g2 < 0:
-            return 1e12
-
-
-        for i in range(lhc_p.m):
-            g3 = gamma1 - kappa[i] + kappa[i] * theta[i] + sigma[i]**2/2
-            if g3 > 0:   
-                return 1e12
-
-        for i in range(lhc_p.m):
-            g4 = gamma1 - kappa_p[i] + kappa_p[i] * theta_p[i]   + sigma[i]**2/2
-            if g4 > 0:
-                return 1e12
-
-        neg_loglik,Xn, Zn, Pn = self.kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0)
-        return neg_loglik
 
     def get_kalman_params(self,t_obs, T_M_grid, CDS_obs,x0,lhc_p):
         t0 = t_obs
@@ -988,7 +1124,7 @@ class LHC_single():
 
 
         result = minimize(
-            fun=self.kalman_wrapper,
+            fun=kalmanfilter_opt,
             x0=x0,
             args=(t_obs, t0, T_M_grid, CDS_obs,lhc_p,self.X0),
             method='Nelder-Mead',
@@ -996,7 +1132,7 @@ class LHC_single():
             options = {
                 "xatol": 1e-4,
                 "fatol": 1e-4,
-                "maxiter": 1000,
+                "maxiter": 500,
                 "disp": True
             }
         )
@@ -1007,10 +1143,10 @@ class LHC_single():
         if self.kalman_obj >=1e12:
             return optim_params, 0, 0, 0
         else:
-            neg_log_lik, Xn,Zn, Pn = self.kalmanfilter_opt(optim_params,t_obs,t0,T_M_grid,
+            Xn,Zn, Pn = kalmanfilter_out(optim_params,t_obs,t0,T_M_grid,
                                                                     CDS_obs,lhc_p,self.X0)
             return optim_params, Xn,Zn, Pn
-
+        
     def run_n_kalmans(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20):
         # Define grid of values. 
         current_objective = 1e10 #very high objective.
@@ -1049,19 +1185,7 @@ class LHC_single():
         # Set new optimal parameters. 
         return  out_params,  Xn_out,Zn_out, Pn_out
 
-    # Transform Kalman Z parameters:
-    def kalman_X_Y(self,t_obs,Z):
-        n_obs = t_obs.shape[0]
-        # find Z0 (use stationary given params)
-        mu1 = self.solve_mu1(self.kappa_p,self.theta_p,self.gamma1)
-        Z0 = self.compute_stationary(self.kappa_p,self.theta_p,self.m,self.gamma1,mu1)
-        Y = np.ones(n_obs)
-        X = np.ones((n_obs, self.m))*Z0
-        for i in range(1,n_obs):
-            delta = t_obs[i] - t_obs[i-1]
-            Y[i] = Y[i-1] + self.gamma @ X[i-1,:] * delta
-            X[i] = Y[i] * Z[i,:]
-        return X,Y
+
 ####### As a consequence of Kalman filtering, we may calculate MPR ###########
     def get_MPR(self, opt_params, Y,X,CDS):
         ## Following appendix B for this.
@@ -1176,7 +1300,7 @@ class LHC_single():
         prices = np.zeros(shape = N)
         for i in range(N):
             # Get Latent states. Simulate to time of inception of CDS. Calculate only for 1 maturity.
-            T_return, X_Q, X_P = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed+i)
+            T_return, X_Q, X_P = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed)
             S = X_Q[:,0]
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
             U = uniform.rvs()
@@ -1198,41 +1322,6 @@ class LHC_single():
 
         return price_MC
     
-
-    # Simulate digital Barrier in the model. 
-    def get_digital_barrier_price_MC(self,t,t0,t_M,strike,chi0,N,M,seed=1000, P_params=None):
-        # If p params specific (Sigma specific), se can calculate for differnt sigma
-        if P_params is not None:
-            lhc_p = self.build_P_params(P_params,self.gamma1)
-
-        # N prices are comuted and averaged MC
-        prices = np.zeros(shape = N)
-        for i in range(N):
-            # Get Latent states. Simulate to time of inception of CDS. Calculate only for 1 maturity.
-            T_return, X_Q, X_P = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed+i)
-            S = X_Q[:,0]
-            # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
-            U = uniform.rvs()
-            # If survival falls below U at any points, default happened prior to t0
-            if np.any(S <= U):
-                # Observe
-                prices[i] = 0
-            # Else - begin to compute prices as no default
-            else: 
-                latent_end = X_Q[-1,:]
-                # Value is assumed to be exactly at inception date first date of contract
-                Value_CDS = self.psi_cds(t0, t0, t_M, strike) @ latent_end
-                # Problem: This being below zero. 
-                # Discount back: 
-                # Note still an option, so only enter if positive. 
-                prices[i] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0)
-            
-            seed += 1
-        price_MC = np.mean(prices)
-
-        return price_MC
-    
-
 
 ## Pricing numba functions:
 @njit
