@@ -211,7 +211,23 @@ def cds_fun(lhc, chi, t,t0, t_mat_grid):
     return result
 
 @njit
+def cds_deriv(lhc, chi, t,t0, t_mat_grid):
+    result = np.zeros((t_mat_grid.shape[0],lhc.m), dtype=np.float64)
+    for i in range(t_mat_grid.shape[0]):
+        # Pass a scalar from the array X
+        prem = psi_prem(lhc,t,t0,t_mat_grid[i])
+        prot = psi_prot(lhc,t,t0,t_mat_grid[i])
+        for z_dim in range(lhc.Y_dim,lhc.m+lhc.Y_dim):
+            term1 = prot[z_dim] / np.dot(prem, chi)
+            term2 = np.dot(prot, chi) / np.dot(prem, chi)**2 *prem[z_dim] 
+            result[i,z_dim-1] = term1 - term2
+        
+    return result
+
+
+@njit
 def cds_fun_lin(lhc, chi_m1, t,t0, t_mat_grid):
+    chi_m1 = np.append([1],chi_m1)
     result = np.zeros((t_mat_grid.shape[0],int(lhc.Y_dim+ lhc.m)), dtype=np.float64)
     for i in range(t_mat_grid.shape[0]):
         # Pass a scalar from the array X
@@ -236,9 +252,29 @@ def cds_value(lhc, t,t0, t_mat_grid,CDS_grid):
 
 # standard kalman with previous in denom.
 @njit
-# def update_step_lin(X_pred,X_pred_m1, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
-def update_step_lin(X_pred, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
+def update_step_cds(X_pred, P_pred, h,h_p, R_k, t_obs,t0, t_mats, lhc, CDS_k):
+    pred_Xn = np.append([1],X_pred) # Add one for computations of cds spread and derivative
+    # Step 3: Mean prediction, covariance, Kalman Gain etc.
+    mu_k = h(lhc, pred_Xn, t_obs,t0, t_mats)
+    
+    H_x = h_p(lhc, pred_Xn, t_obs,t0, t_mats)
+    # covariance
+    S_k = H_x @ P_pred @ H_x.T + R_k
+    det_S = np.linalg.det(S_k)
+    if abs(det_S) < 1e-12:
+        S_k_inv = np.linalg.pinv(S_k)
+    else:
+        S_k_inv = np.linalg.inv(S_k)
 
+    # Step 4: Compute Kalman Gain, filtered mean state, covariance.
+    K_k = P_pred @ H_x.T @ S_k_inv
+    vn = (CDS_k - mu_k) # In Linear Approx instance
+    m_k = X_pred + K_k @ vn
+    P_k = P_pred - K_k @ S_k @ K_k.T
+
+    return mu_k, vn,S_k, m_k, P_k
+
+def update_step_lin(X_pred, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
     L = X_pred.shape[0]
     # Step 3: Mean prediction, covariance, Kalman Gain etc.
     # H = h(lhc, X_pred_m1, t_obs,t0, t_mats)
@@ -585,9 +621,11 @@ class LHC_single():
         return self.psi_prot(t, t0, t_M) - k * self.psi_prem(t, t0, t_M)
 
 
-    def CDS_model(self,t_obs, T_M_grid, CDS_obs, X=None,Y=None):
+    def CDS_model(self,t_obs, T_M_grid, CDS_obs, t0=None, X=None,Y=None,Z=None):
         # Get latent states.
-        t0 = t_obs
+        # If t0 is none, assume initial date is today
+        if t0 is None:
+            t0 = t_obs
         # mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
         #                         for i in range(0,int(np.max(t0)+1))]).flatten()
         # # Ensure mat_actual is sorted
@@ -610,6 +648,9 @@ class LHC_single():
         # Numba code to generate matrices to solve for.
         if (X is None) | (Y is None) :
             X,Y,Z = get_states(lhc, t_obs, T_M_grid, CDS_obs,self.X0)
+
+        if Z is not None:
+            X,Y = self.kalman_X_Y(t_obs,Z)
 
         #print('Done Getting Z,Y,X')
         state_vec = np.vstack([Y, X])
@@ -874,7 +915,7 @@ class LHC_single():
         # Only criteria on mu1 - mu1 < k/kappa. Set to theta
         mu1 = self.solve_mu1(kappa_p, theta_p, gamma1)
         mu = self.compute_stationary(kappa_p,theta_p,lhc_q.m,gamma1,mu1= mu1)
-        pred_Xn = drift_term(mu,lhc_p,Delta) #mu
+        pred_Xn = mu #drift_term(mu,lhc_p,Delta) #mu
         # Z0[1:] + (lhc_p.b.flatten() + (lhc_p.beta + np.identity(lhc_p.beta.shape[0]) * (-lhc_p.gamma @ Z0[1:])) @ Z0[1:])*Delta
         # Just set the covariance guess to the innovated one.
         P_state = np.array([mu[i] * (1 - mu[i]) for i in range(0,mu.shape[0]) ])
@@ -884,16 +925,18 @@ class LHC_single():
         # Just an attemt, not to keep.
         P0 = Sigma_prod.copy()
         pred_Pn = P0[1:,1:] 
-
-        # pred_Xn = drift_term(Z0[1:],lhc_p,Delta)
-        # P_cov = drift_deriv_term(Z0[1:],lhc_p,Delta)
-        # pred_Pn =  P0[1:,1:] 
+        
         # Run algo. 
         for n in range(0,n_obs):
-            Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Pn,cds_value,R_k,
-                                                                t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+            # if n == 0:
+            #     pred_Xm1 = mu
+            Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_cds(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
+                                                             t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+            # Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Pn,cds_value,R_k,
+            #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
             Xn_extended = np.append([1],Xn[n,:])
             Zn[n,:] =  cds_fun(lhc_q,Xn_extended,t_obs[n],t0[n],T_M_grid[:,n])
+            # pred_Xm1 = pred_Xn.copy()
 
             # add additional check until parameters are figured out
             if (np.any(Xn<0) |np.any(Xn>1)):
@@ -920,16 +963,16 @@ class LHC_single():
                 # Then update the predictions:
                 # linear version
                 # Do prediction directly, no function
-                # pred_Xn = drift_term(Xn[n,:],lhc_p,Delta) 
-                # pred_Xn_prev = pred_Xn # previous one at this point
                 Xn_prev = Xn[n-1,:]
                 if n == 0:
                     Xn_prev = pred_Xn # only sensible guess in this case
                 # Taylor approximate the transition. 
-                pred_Xn = drift_term(Xn_prev,lhc_p,Delta)+(
-                    drift_deriv_term(Xn_prev,lhc_p,Delta)@ (Xn[n,:]-Xn_prev))
-                
-                P_cov = drift_deriv_term(Xn[n,:],lhc_p,Delta)
+                # pred_Xn = drift_term(Xn_prev,lhc_p,Delta)+(
+                #     drift_deriv_term(Xn_prev,lhc_p,Delta)@ (Xn[n,:]-Xn_prev))
+                # Pure Euler
+                pred_Xn = drift_term(Xn[n,:],lhc_p,Delta) 
+
+                P_cov = drift_deriv_term(Xn[n,:],lhc_p,np.sqrt(Delta))
                 pred_Pn =  P_cov @ Pn[n,:,:] @ P_cov.T + Q_k
 
                 # Straight euler.
@@ -996,7 +1039,7 @@ class LHC_single():
             options = {
                 "xatol": 1e-4,
                 "fatol": 1e-4,
-                "maxiter": 1000,
+                "maxiter": 500,
                 "disp": True
             }
         )
@@ -1128,14 +1171,10 @@ class LHC_single():
         delta = T / M
         T_return = np.array([0.00001] + [delta*k for k in range(1,M+1)])
         path_Q = np.ones((M + 1, self.m+self.Y_dim))
-        path_P = np.ones((M + 1, self.m+self.Y_dim))
 
         # Set initial value. 
         path_Q[0,:] = chi0
-        path_P[0,:] = chi0
-
         W_Q = norm.rvs(size = (M,self.m),random_state=seed) # simulate at beginning - faster!
-        W_P = norm.rvs(size = (M,self.m),random_state=seed+1) # simulate at beginning - faster!
 
         # Get A matrix. Add argument if timul under P or Q.
         params_Q = np.concatenate([self.kappa,self.theta,self.gamma1])
@@ -1158,28 +1197,26 @@ class LHC_single():
             Sigma_prod = (cov_trans @ np.diag(np.sqrt(P_state))) 
             # Out
             path_Q[i,:] = path_Q[i-1,:] + delta*mu_t +  np.sqrt(delta) * Sigma_prod @ W_Q[i-1,:]
-            # Get the Girsanov measure change.
-            gir = (lhc_p.b - self.b).flatten() * path_Q[i-1,0] + ((lhc_p.beta - self.beta) @ path_Q[i-1,1:])
-            gir = np.append([0],gir) # No change of measure for Y
-            path_P[i,:] = path_P[i-1,:] + delta*(mu_t-gir) +  np.sqrt(delta) * Sigma_prod @ W_P[i-1,:]
 
-        return T_return, path_Q, path_P
+        return T_return, path_Q
     
 
     # Simulate option prices in the model. 
-    def get_cdso_pric_MC(self,t,t0,t_M,strike,chi0,N,M,seed=1000, P_params=None):
+    def get_cdso_pric_MC(self,t,t0,t_M,strikes,chi0,N,M,seed=1000, P_params=None):
         # If p params specific (Sigma specific), se can calculate for differnt sigma
         if P_params is not None:
             lhc_p = self.build_P_params(P_params,self.gamma1)
 
         # N prices are comuted and averaged MC
-        prices = np.zeros(shape = N)
+        N_strikes = strikes.shape[0]
+        prices = np.zeros(shape = (N,N_strikes))
+        prices_MC_hist = np.zeros(shape = (N,N_strikes))
         for i in range(N):
             # Get Latent states. Simulate to time of inception of CDS. Calculate only for 1 maturity.
-            T_return, X_Q, X_P = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed+i)
+            T_return, X_Q = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed)
             S = X_Q[:,0]
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
-            U = uniform.rvs()
+            U = uniform.rvs(random_state=seed)
             # If survival falls below U at any points, default happened prior to t0
             if np.any(S <= U):
                 prices[i] = 0
@@ -1187,20 +1224,30 @@ class LHC_single():
             else: 
                 latent_end = X_Q[-1,:]
                 # Value is assumed to be exactly at inception date first date of contract
-                Value_CDS = self.psi_cds(t0, t0, t_M, strike) @ latent_end
-                # Problem: This being below zero. 
-                # Discount back: 
-                # Note still an option, so only enter if positive. 
-                prices[i] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0)
-            
+                # Loop over strikes here, to save simul time later on (also same randomness)
+                for j in range(N_strikes):
+                    # Find value of option using the strike. This is the payoff. 
+                    Value_CDS = self.psi_cds(t0, t0, t_M, strikes[j]) @ latent_end
+                    # Discount back. Also, divide by a^TY_t. If t=0, then not matter.
+                    # Note still an option, so only enter if positive. 
+                    prices[i,j] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0) / S[0]
+            # Achieve a running mean also for convergence assessment.
+            prices_MC_hist[i, :] = np.mean(prices[:i+1, :], axis=0)
             seed += 1
-        price_MC = np.mean(prices)
 
-        return price_MC
+        price_MC = np.mean(prices,axis=0)
+
+        return prices_MC_hist,price_MC
     
 
     # Simulate digital Barrier in the model. 
-    def get_digital_barrier_price_MC(self,t,t0,t_M,strike,chi0,N,M,seed=1000, P_params=None):
+    def get_digital_barrier_price_MC(self,t,t0,t_M,T,barrier,chi0,N,M,seed=1000, P_params=None):
+        '''
+        t: Time to price at
+        t0: Start of CDS.
+        t_M: Maturity of CDS
+        T: Maturity of option. Needs to satisfy T<t_m
+        '''
         # If p params specific (Sigma specific), se can calculate for differnt sigma
         if P_params is not None:
             lhc_p = self.build_P_params(P_params,self.gamma1)
@@ -1208,31 +1255,80 @@ class LHC_single():
         # N prices are comuted and averaged MC
         prices = np.zeros(shape = N)
         for i in range(N):
-            # Get Latent states. Simulate to time of inception of CDS. Calculate only for 1 maturity.
-            T_return, X_Q, X_P = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed+i)
+            # Get Latent states. Simulate path of CDS till mat.
+            T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed)
+            # Retrieve price path...
+            CDS_sim = self.CDS_model(T_return, T_M_grid=(T_return + t_M).T,CDS_obs=None,t0=t0,Z=X_Q)
             S = X_Q[:,0]
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
             U = uniform.rvs()
-            # If survival falls below U at any points, default happened prior to t0
-            if np.any(S <= U):
-                # Observe
-                prices[i] = 0
-            # Else - begin to compute prices as no default
+            # If survival falls below U at any points, default happened prior to T. 
+            # Should be zero, but depends on barrier. Default happens at some point below..
+            default_event =  S <= U
+            if np.any(default_event):
+                # In this instance, default has happened as some point. Find index. 
+                idx = np.where(default_event)
+                # Get path maximum up to the point:
+                max_cds_to_default = np.max(CDS_sim[:idx])
+                if max_cds_to_default >= barrier:
+                    # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
+                    prices[i] = np.exp(-self.r * (T - t))
+                else:
+                    # If not above, there is zero payoff.
+                    prices[i] = 0
+            # Else - no default happened, but same logic as before.
             else: 
-                latent_end = X_Q[-1,:]
-                # Value is assumed to be exactly at inception date first date of contract
-                Value_CDS = self.psi_cds(t0, t0, t_M, strike) @ latent_end
-                # Problem: This being below zero. 
-                # Discount back: 
-                # Note still an option, so only enter if positive. 
-                prices[i] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0)
+                # Get path maximum up to expiry:
+                max_cds_to_default = np.max(CDS_sim)
+                if max_cds_to_default >= barrier:
+                    # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
+                    prices[i] = np.exp(-self.r * (T - t))
+                else:
+                    # If not above, there is zero payoff.
+                    prices[i] = 0
             
             seed += 1
         price_MC = np.mean(prices)
 
         return price_MC
     
+    # Simulate digital Barrier in the model. 
+    def get_lookback_price_MC(self,t,t0,t_M,T,chi0,N,M,seed=1000, P_params=None):
+        '''
+        t: Time to price at
+        t0: Start of CDS.
+        t_M: Maturity of CDS
+        T: Maturity of option. Needs to satisfy T<t_m
+        '''
+        # If p params specific (Sigma specific), se can calculate for differnt sigma
+        if P_params is not None:
+            lhc_p = self.build_P_params(P_params,self.gamma1)
 
+        # N prices are comuted and averaged MC
+        prices = np.zeros(shape = N)
+        for i in range(N):
+            # Get Latent states. Simulate path of CDS till mat.
+            T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed+i)
+            # Retrieve price path...
+            CDS_sim = self.CDS_model(T_return, T_M_grid=(T_return + t_M).T,CDS_obs=None,t0=t0,Z=X_Q)
+            S = X_Q[:,0]
+            # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
+            U = uniform.rvs()
+            # If survival falls below U at any points, default happened prior to T - No payoff
+            default_event =  S <= U
+            if np.any(default_event):
+                prices[i] = 0
+            # Else - no default happened
+            else: 
+                # Get path minimum of CDS:
+                min_cds_to_default = np.min(CDS_sim)
+                prices[i] = np.exp(-self.r * (T - t)) * (CDS_sim[-1] - min_cds_to_default)
+            
+            seed += 1
+        price_MC = np.mean(prices)
+
+        return price_MC
+    
 
 ## Pricing numba functions:
 @njit
