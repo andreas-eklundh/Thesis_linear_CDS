@@ -3,10 +3,12 @@ from scipy.optimize import minimize, NonlinearConstraint, Bounds
 
 from numba import njit, float64, int64
 from Models.ATSMGeneral.ATSM import ATSM
+from Models.BaselineCIR_alternative.CIR_numba import calc_cds
 from scipy.stats import norm, ncx2, gamma, expon
 from scipy.integrate import quad
 from scipy.linalg import expm
 from numba.experimental import jitclass
+from scipy.optimize import differential_evolution
 
 
 ## Class to actually call
@@ -29,9 +31,9 @@ class CIRIntensity():
             else:
                 rng = np.random.default_rng(seed)  # independent each time
 
-            self.kappa = rng.uniform(0.02, 0.1, size=(X_dim,))
-            self.theta =  rng.uniform(0.001, 0.01, size=(X_dim,))
-            self.sigma =  rng.uniform(0.001, np.sqrt(2*self.kappa*self.theta), size=(X_dim,))
+            self.kappa = rng.uniform(0.2, 0.8, size=(X_dim,))
+            self.theta =  rng.uniform(0.01, 0.1, size=(X_dim,))
+            self.sigma =  rng.uniform(0.01, np.sqrt(2*self.kappa*self.theta), size=(X_dim,))
             # initialise all positive.
             self.kappa_p = self.kappa + 0.1 # just initialise these clsoe to each other
             self.theta_p = self.theta + 0.01 # just initialise these clsoe to each other
@@ -58,12 +60,12 @@ class CIRIntensity():
         gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
         # If x0 is one dimensional (intensity), use Lando forthetalas
         
-        if corr == False:
+        if (corr == False) & (np.all(np.isreal(x0))):
             if isinstance(T,float):
                 T_size = 1
             else:
                 T_size = T.shape[0]
-            
+
             # In this case, rho needs to be a vector (rho is rho 1 in actuality)
             alpha, beta = np.zeros((T_size)),np.zeros((T_size,self.X_dim)) 
             for i in range(self.X_dim):
@@ -104,7 +106,7 @@ class CIRIntensity():
             atsm = ATSM(K0,K1,H0,H1,rho0=0,rho1=rho1)
             atsm.solve_ODE_system(x0,0,T)
 
-            return atsm.alpha,atsm.beta
+            return atsm.alpha,atsm.beta.T
 
     def cir_derivatives(self,params,x,T,rho=1, corr=False):
         # Can work in 
@@ -136,20 +138,20 @@ class CIRIntensity():
 
 
     # The Laplace Transform
-    def Laplace_Transform(self,params,lambda_t, T):
-        x0 = np.zeros(self.X_dim) # This is how it is supposed to be...
-        alpha,beta = self.cir_solution(params,x0,T,rho=1)
+    def Laplace_Transform(self,params,lambda_t, T,x_overwrite=None):
+        if x_overwrite is not None:
+            x = x_overwrite 
+        else:
+            x = np.zeros(self.X_dim)
+        alpha,beta = self.cir_solution(params,x,T,rho=1)
         # Return value of Laplace Transform - Specific vals of w->ZCB price.
         return np.exp(alpha + beta @ lambda_t).flatten()
 
     ##### Section on all the pricing stuff.
     # Coupon leg 'easy' should be similar to a ATSM 
-    def calc_coupon_leg(self,params,t,t_mat, lambda_t):
+    def calc_coupon_leg(self,params,t,t0,t_mat, lambda_t):
         I = np.zeros(1)
-        t_grid_len = int(np.round((t_mat - t) / self.tenor).item()) + 1
-        t_grid = np.zeros(t_grid_len)
-        for i in range(t_grid_len):
-            t_grid[i] = t + i * self.tenor
+        t_grid = np.arange(t0, t_mat + 1e-12, self.tenor)
         for t_idx in range(1, len(t_grid)):
             expectation = self.Laplace_Transform(params, lambda_t.T, t_grid[t_idx] - t)
             I += (t_grid[t_idx]-t_grid[t_idx-1]) * np.exp(-self.r * (t_grid[t_idx] - t)) * expectation
@@ -159,64 +161,65 @@ class CIRIntensity():
     # Accrued leg. Think it is going to follow similar to protection leg. 
     # so (46 on 23/59) with the additional increment term.
     # Helper function to get the grid.
-    def _get_default_grid(self,u, t_grid):
-        """Return time since previous payment date (in same time units as t_grid).
-        If u <= first point, return 0.0.
-        t_grid must be sorted and include the start time t0.
-        """
+    def _get_default_grid(self, u, t_grid):
         if u <= t_grid[0]:
             return 0.0
-        for idx in range(len(t_grid) - 1):
-            if (u > t_grid[idx]) and (u <= t_grid[idx + 1]):
-                return (u - t_grid[idx])
-        # if beyond last payment date:
-        return max(0.0, u - t_grid[-1])
+        if u >= t_grid[-1]:
+            return t_grid[-1] - t_grid[-2]  # last interval length
+        idx = np.searchsorted(t_grid, u) - 1
+        return u - t_grid[idx]
 
-    def calc_accrual_leg(self,params,t,t_mat, lambda_t):
+    def calc_accrual_leg(self,params,t,t0,t_mat, lambda_t):
         x = np.zeros(self.X_dim)
-        t_grid_len = int(np.round((t_mat - t) / self.tenor).item()) + 1
-        t_grid = np.zeros(t_grid_len)
-        for i in range(t_grid_len):
-            t_grid[i] = t + i * self.tenor
+        t_grid = np.arange(t0, t_mat + 1e-12, self.tenor)
         integrand = lambda u: (np.exp(-self.r * (u-t)) * self._get_default_grid(u,t_grid) *  
             (self.cir_derivatives(params,x,u-t)[0] + 
             self.cir_derivatives(params,x,u-t)[1] @ lambda_t.T) *
             self.Laplace_Transform(params,lambda_t.T, u - t)
         )
 
-        Ai_val, _ = quad(integrand,t,t_mat,epsabs=1e-9, epsrel=1e-9)
-        return Ai_val
+        Al_val = 0.0
+        for i in range(len(t_grid) - 1):
+            a, b = t_grid[i], t_grid[i + 1]
+            Al_val += quad(integrand, a, b, epsabs=1e-8, epsrel=1e-8, limit=100)[0]
+        return Al_val
 
     # Protection leg:
-    def calc_protection_leg(self,params,t,t_mat, lambda_t):
+    def calc_protection_leg(self,params,t,t0,t_mat, lambda_t):
         x = np.zeros(self.X_dim)
 
         integrand = lambda u: ((1- self.delta)*np.exp(-self.r * (u-t)) * (self.cir_derivatives(params,x,u-t)[0] + 
             self.cir_derivatives(params,x,u-t)[1] @ lambda_t.T)*
             self.Laplace_Transform(params,lambda_t.T, u - t)
             )
-        prot_val, _ = quad(integrand,t,t_mat,epsabs=1e-9, epsrel=1e-9)
+        prot_val, _ = quad(integrand,t0,t_mat,epsabs=1e-9, epsrel=1e-9)
 
         return prot_val
 
 
 
-    def calc_CDS(self,params,t,t_mat, lambda_t):
-        prot_val = self.calc_protection_leg(params,t,t_mat, lambda_t)
-        I1 = self.calc_coupon_leg(params,t,t_mat, lambda_t)
-        I2 = self.calc_accrual_leg(params,t,t_mat, lambda_t)
+    def calc_CDS(self,params,t,t_mat, lambda_t,t0=None):
+        # If no t0 provided, assume at inception
+        if t0 == None:
+            t0=t
+        prot_val = self.calc_protection_leg(params,t,t0,t_mat, lambda_t)
+        I1 = self.calc_coupon_leg(params,t,t0,t_mat, lambda_t)
+        I2 = self.calc_accrual_leg(params,t,t0,t_mat, lambda_t)
 
-        return prot_val / (I1 + I2 )
+        return prot_val /(I1 + I2 )
 
 
 
-    def cds_spread(self, X,params, t, t_mat_grid):
+    def cds_spread(self, X,params, t, t_mat_grid,t0=None):
+        # If no t0 provided, assume at inception
+        if t0 == None:
+            t0 = t
         result = np.zeros(t_mat_grid.shape[0], dtype=np.float64)
         for i in range(t_mat_grid.shape[0]):
             # Pass a scalar from the array X
             # Make sure that t grid is of size 1 due to logic.
             t_mat = np.array([t_mat_grid[i]])
-            result[i] = self.calc_CDS(params,t, t_mat, X)[0] # A
+            result[i] = self.calc_CDS(params,t, t_mat, X,t0)[0] # A
         return result
 
     def Update_step(self,X_pred, P_pred, A,a, R_k, Y):
@@ -279,7 +282,7 @@ class CIRIntensity():
 
     # Kalman filtering.
     def Kalman(self,params,t_obs, t_mat_grid, Y, result = False):
-        # print(params)
+        print(params)
         kappa,theta,sigma,kappa_p,theta_p,sigma_err = self.unpack_params(params)
         # Stop optimization if bad initial params.
         # positivity constraints (soft bounds)
@@ -335,10 +338,9 @@ class CIRIntensity():
         for n in range(0,n_obs):
             # UPDATE STEP
             Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
+            Xn = np.maximum(Xn,1e-6) # Truncate Xn
             # punish hashly if Xn below zero (mainly i). 
-            # if np.any(Xn < 0 ) & (result == False):
-            #     # Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
-            #     return 1e12
+
             if result == True:
                 Xn_out[n,:] = Xn
                 Zn_out[n,:] = A @ Xn + a
@@ -363,11 +365,11 @@ class CIRIntensity():
                 # Works for Uncorrelated and indep noise.
                 Q_t = (sigma**2 * theta_p * (1-np.exp(-kappa_p * Delta))**2 / (2 * kappa_p) +
                         Xn * sigma**2 * (np.exp(-kappa_p * Delta) - np.exp(-2*kappa_p * Delta))/ kappa_p)
-                Q_t = ( np.identity(self.X_dim) * Q_t).reshape((self.X_dim,self.X_dim))
+                Q_t = np.diag( Q_t.flatten())
 
                 Delta = t_obs[n+1] - t_obs[n]
                 pred_Xn, pred_Pn = self.Prediction_step(Xn,Pn,phi_X,phi_0,Q_t)
-
+                pred_Xn = np.maximum(pred_Xn, 1e-6)
         if result == True:
             return Xn_out,Zn_out, Pn_out
         else:
@@ -402,45 +404,63 @@ class CIRIntensity():
         x0 = x0.flatten()
 
         # Try a different optimizer than nelder mead
-        # d = self.X_dim  # number of factors
+        d = self.X_dim  # number of factors
 
-        # n_params = 5*d + 1  # adjust to actual number of params
-        # lower_bounds = 1e-8 * np.ones(n_params)  # small positive number to avoid zero
-        # upper_bounds = np.full(n_params, np.inf)
-
-        # bounds = Bounds(lower_bounds, upper_bounds)
-        # nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
-
-        # res = minimize(
-        #     fun=self.Kalman,
-        #     x0=x0,
-        #     method='trust-constr',
-        #     args=(t_obs, t_mat_grid, Y, False),
-        #     bounds=bounds,
-        #     constraints=[nonlinear_constraint],
-        #     tol=1e-9,  # or whatever tolerance you need
-        #     options={
-        #         'maxiter': 100
-        #     }
-        # )
-        res = minimize(
-            fun = self.Kalman,
-            x0 = x0,
-            method='Nelder-Mead',
-            args = (t_obs, t_mat_grid, Y,False),
-            options = {
-                "xatol": 1e-6,
-                "fatol": 1e-6,
-                "maxiter": 1000,
-                "disp": True
-            }
+        bounds = (
+            [(1e-6, 3)] * d +     # kappa
+            [(1e-6, 1)] * d +     # theta
+            [(1e-6, 3)] * d +     # kappa_p
+            [(1e-6, 1)] * d +     # theta_p
+            [(1e-6, 1)] * d +     # sigma (assuming per-factor vol)
+            [(1e-6, 0.5)]         # sigma_err
         )
+        nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
+
+        result = differential_evolution(
+            func=self.Kalman,
+            bounds=bounds,
+            constraints=(nonlinear_constraint,),
+            # args=(t_obs[::3], t_mat_grid[:, ::3], Y[::3, :]),
+            args=(t_obs, t_mat_grid, Y),
+
+            maxiter=100,          
+            popsize=5,           # smaller population
+            tol=1e-4,            # looser tolerance
+            workers=1,
+            updating='immediate',
+            polish=False
+        )
+
+        # If DE failed or hit constraint penalties, bail early
+        if result.fun >= 1e12:
+            return result.x, 0, 0, 0
+
+        # --- Local Refinement ---
+        n_params = 5*d + 1  # adjust to actual number of params
+        lower_bounds = 1e-8 * np.ones(n_params)  # small positive number to avoid zero
+        upper_bounds = np.full(n_params, np.inf)
+
+        bounds = Bounds(lower_bounds, upper_bounds)
+        nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
+
+        # --- Local Fine Optimization ---
+        res = minimize(
+            self.Kalman,
+            x0=result.x,
+            args=(t_obs, t_mat_grid, Y),
+            method='trust-constr',          # supports nonlinear constraints
+            bounds=bounds,
+            constraints=[nonlinear_constraint],
+            options={'maxiter': 200, 'gtol': 1e-6, 'verbose': 2}
+        )
+
+
         params = res.x
         self.kalman_obj  = res.fun
         # Run and return solution
-        #Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
+        Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
 
-        return params #, Xn,Zn,Pn
+        return params , Xn,Zn,Pn
     
     def run_n_kalman(self, t_obs,t_mat_grid,Y,base_seed=1000,n_restarts=5):
         # Define grid of values. 
@@ -461,20 +481,16 @@ class CIRIntensity():
         return out_params, Xn_out,Zn_out,Pn_out
             
     # Simulation will likely also be th eway to go about expression in Filipovic (tedious)
-    def simulate_intensity(self, lambda0,T,M,scheme, measure):
+    def simulate_intensity(self, lambda0,T,M,scheme,seed=1000):
         # TODO: Make possible to simulate in several dim
-        if measure == 'P':
-            theta = self.theta_p
-            kappa = self.kappa_p
-        elif measure == 'Q':
-            theta = self.theta
-            kappa = self.kappa
+        theta = self.theta
+        kappa = self.kappa
         # Do baseline calculations
         delta = T / M
         X_dim = lambda0.shape[0]
-        T_return = np.array([0.00001] + [delta*k for k in range(1,M+1)])
+        T_return = np.array([0] + [delta*k for k in range(1,M+1)])
         path = (np.ones(shape = (X_dim,M + 1))* lambda0.reshape((X_dim,1)) ).T # to include zero.
-        W = norm.rvs(size = (X_dim*M)).reshape((M,X_dim)) # simulate at beginning - faster!
+        W = norm.rvs(size = (X_dim*M),random_state=seed).reshape((M,X_dim)) # simulate at beginning - faster!
         # Creat Matrices
         kappa_mat = np.diag(kappa.flatten())
         theta_vec = theta
@@ -488,8 +504,8 @@ class CIRIntensity():
             for i in range(1,M+1):
                 mu_t = kappa_mat @ (theta_vec - path[i - 1,:])
                 sigma_t = sigma_mat *  np.sqrt(path[i-1])
-                #sigma_prime_t = 
-                path[i,:] = path[i - 1,:] + delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]+ 1/2 * sigma_prime_t * sigma_t * delta*(W[i-1]**2-1)
+                sigma_prime_t = sigma_mat * 1/(2*np.sqrt(path[i-1]))
+                path[i,:] = path[i - 1,:] + delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]+ 1/2 * delta* sigma_prime_t @ sigma_t @ (W[i-1,:]**2-1)
         elif scheme == "Exact":
             # TODO: Correct this.
             for i in range(1,M+1):
@@ -503,37 +519,176 @@ class CIRIntensity():
 
 
     # MC pricing. 
-    def get_cdso_pric_MC(self,params,t,t0,t_M,strike,lambda0,N,M):
+    def get_cdso_pric_MC(self,params,t,t0,t_M,strikes,X0,N,M,seed=1000):
         # N prices are comuted and averaged MC
-        prices = np.zeros(shape = N)
+        N_strikes = strikes.shape[0]
+        prices = np.zeros(shape = (N,N_strikes))
+        prices_MC_hist =  np.zeros(shape = (N,N_strikes))
         for i in range(N):
             # Get default intensity process. 
-            T_return,lambda_t = self.simulate_intensity(lambda0,t0,M,scheme = 'Milstein',measure='Q')
+            T_return,X_t = self.simulate_intensity(X0,t0,M,scheme = 'Milstein',seed=seed)
+            # lambda_t is the sum of latent states..
+            lambda_t = np.sum(X_t,axis=1)
             # Compute prob of default at time t0
             deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
             Lambda = np.cumsum(lambda_t[1:]*deltas)
             # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
-            E = expon.rvs()
+            E = expon.rvs(random_state = seed)
             if Lambda[-1] >= E:
                 prices[i] = 0
             # Else - begin to compute prices. 
             else: 
-                lambda_end = np.array([lambda_t[-1]])
-                prot = self.calc_protection_leg(params, t0, t_M, lambda_end)
+                X_t0 = X_t[-1,:]
+                prot = self.calc_protection_leg(params, t0,t0, t_M, X_t0)
                 # Quick fix due to way its written
-                I1 = self.calc_coupon_leg(params, t0, t_M, lambda_end)
-                I2 = self.calc_accrual_leg(params, t0, t_M, lambda_end)
+                I1 = self.calc_coupon_leg(params,t0, t0, t_M, X_t0)
+                I2 = self.calc_accrual_leg(params,t0, t0, t_M, X_t0)
 
-                Value_CDS = prot - strike * (I1 + I2)
-
+                Value_CDS = prot - strikes * (I1 + I2)
                 # Discount back: 
                 # Note still an option, so only enter if positive. 
+                prices[i,:] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0)
+            # Achieve a running mean also for convergence assessment.
+            prices_MC_hist[i, :] = np.mean(prices[:i+1, :], axis=0)
+            seed += 1
+        print(f'CDSO price at Done')
 
-                prices[i] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0)
+        price_MC = np.mean(prices,axis=0)
 
+        return prices_MC_hist,price_MC
+    
+    
+    # Simulate digital Barrier in the model. 
+    def get_digital_barrier_price_MC(self,params,t,t0,t_M,T,barriers,X0,N,M,seed=1000):
+        '''
+        t: Time to price at
+        t0: Start of CDS.
+        t_M: Maturity of CDS
+        T: Maturity of option. Needs to satisfy T<t_m
+        '''
+        # N prices are comuted and averaged MC
+        N_strikes = barriers.shape[0]
+        prices = np.zeros(shape = (N,N_strikes))
+        prices_MC_hist = np.zeros(shape = (N,N_strikes))
+        for i in range(N):
+            # Get Latent states. Simulate path of CDS till mat.
+            T_return,X_t = self.simulate_intensity(X0,t0,M,scheme = 'Milstein',seed=seed)
+            # Compute prob of default at time t0
+            lambda_t = np.sum(X_t,axis=1)
+            # Compute prob of default at time t0
+            deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
+            Lambda = np.cumsum(lambda_t[1:]*deltas)
+            # Get model implies CDS.
+            CDS_sim = np.zeros(Lambda.shape)
+            for n in range(CDS_sim.shape[0]):    
+                # CDS_sim[n] = self.cds_spread(X_t[n,:],params,T_return[n],
+                #                              np.array([T_return[n] + t_M]),T_return[n]+t0)
+                CDS_sim[n] = calc_cds(params, T_return[n], T_return[n] + t_M, 
+                                      X_t[n,:], T_return[n]+t0, self.r, self.delta, 
+                                      self.tenor, self.X_dim)
+            # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
+            E = expon.rvs(random_state = seed)
+            # Should be zero, but depends on barrier. Default happens at some point below..
+            default_event =  Lambda >= E
+            if np.any(default_event):
+                # In this instance, default has happened as some point. Find index. 
+                idx = np.argmax(np.where(default_event))
+                # Get path maximum up to the point:
+                max_cds_to_default = np.max(CDS_sim[:idx])
+                for b_idx in range(N_strikes):
+                    if max_cds_to_default >= barriers[b_idx]:
+                        # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
+                        prices[i,b_idx] = np.exp(-self.r * (T - t))
+                    else:
+                        # If not above, there is zero payoff.
+                        prices[i,b_idx] = 0
+            # Else - no default happened, but same logic as before.
+            else: 
+                # Get path maximum up to expiry:
+                max_cds_to_default = np.max(CDS_sim)
+                for b_idx in range(N_strikes):
+                    if max_cds_to_default >= barriers[b_idx]:
+                        # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
+                        prices[i,b_idx] = np.exp(-self.r * (T - t))
+                    else:
+                        # If not above, there is zero payoff.
+                        prices[i,b_idx] = 0
+            prices_MC_hist[i, :] = np.mean(prices[:i+1, :], axis=0)
+            seed += 1
+        print(f'Digital Done')
+
+        price_MC = np.mean(prices,axis = 0)
+
+
+        return prices_MC_hist,price_MC
+    
+    # Simulate digital Barrier in the model. 
+    def get_lookback_price_MC(self,params,t,t0,t_M,T,X0,N,M,seed=1000):
+        '''
+        t: Time to price at
+        t0: Start of CDS.
+        t_M: Maturity of CDS
+        T: Maturity of option. Needs to satisfy T<t_m
+        '''
+        # N prices are comuted and averaged MC
+        prices = np.zeros(shape = N)
+        prices_MC_hist = np.zeros(shape = N)
+        cds_min =  np.zeros(shape = N)
+        for i in range(N):
+            # Get Latent states. Simulate path of CDS till mat.
+            T_return,X_t = self.simulate_intensity(X0,t0,M,scheme = 'Milstein',seed=seed)
+            # Compute prob of default at time t0
+            lambda_t = np.sum(X_t,axis=1)
+            # Compute prob of default at time t0
+            deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
+            Lambda = np.cumsum(lambda_t[1:]*deltas)
+            # Get model implies CDS.
+            CDS_sim = np.zeros(Lambda.shape)
+            for n in range(CDS_sim.shape[0]):    
+                # CDS_sim[n] = self.cds_spread(X_t[n,:],params,T_return[n],
+                #                              np.array([T_return[n] + t_M]),T_return[n]+t0)
+                CDS_sim[n] = calc_cds(params, T_return[n], T_return[n] + t_M, 
+                                      X_t[n,:], T_return[n]+t0, self.r, self.delta, 
+                                      self.tenor, self.X_dim)
+
+
+            # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
+            E = expon.rvs(random_state = seed)
+            # Should be zero, but depends on barrier. Default happens at some point below..
+            default_event =  Lambda >= E
+            if np.any(default_event):
+                prices[i] = 0
+                # set min to zero here
+                cds_min[i] =0  # np.min(CDS_sim[:i])
+            # Else - no default happened
+            else: 
+                # Get path minimum of CDS:
+                cds_min[i]  = np.min(CDS_sim)
+                prices[i] = np.exp(-self.r * (T - t)) * (CDS_sim[-1] - cds_min[i] )
+            prices_MC_hist[i] = np.mean(prices[:i+1])
+            seed += 1
+        
+        print(f'Lookback at Done')
         price_MC = np.mean(prices)
 
-        return price_MC
+        return prices_MC_hist,price_MC,cds_min
+    
+    ##### The Option inversion formula (can be used to eurpean like options.)
+    def G_transform(self,y,a,b,Xt,T):
+        params = np.concatenate([self.kappa, self.theta, self.sigma,self.kappa_p, self.theta_p,self.sigma_err])
+        first_term = self.Laplace_Transform(params,Xt,T,a)
+        Laplace_fixed = lambda v: self.Laplace_Transform(params,Xt,T,a + 1j * v * b)
+        lower_G = 1e-6  # small shift away from 0
+        upper_G = 100
+        Laplace_int, _ = quad(
+            lambda v: np.imag(Laplace_fixed(v) * np.exp(-1j * v * y)) / v,
+            lower_G, upper_G,
+            limit=200,
+            epsabs=1e-12,
+            epsrel=1e-12
+        )
+
+        return np.real(first_term/2 - Laplace_int/np.pi)
 
 
 

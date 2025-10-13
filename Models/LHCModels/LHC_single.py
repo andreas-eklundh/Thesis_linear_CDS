@@ -10,6 +10,10 @@ from scipy.integrate import quad
 import copy
 from scipy.linalg import sqrtm
 from scipy.optimize import brentq
+from scipy.optimize import differential_evolution
+# At module level (top of your file)
+_GLOBAL_STATE = {}
+
 
 
 
@@ -274,6 +278,7 @@ def update_step_cds(X_pred, P_pred, h,h_p, R_k, t_obs,t0, t_mats, lhc, CDS_k):
 
     return mu_k, vn,S_k, m_k, P_k
 
+@njit
 def update_step_lin(X_pred, P_pred, h, R_k, t_obs,t0, t_mats, lhc, CDS_k):
     L = X_pred.shape[0]
     # Step 3: Mean prediction, covariance, Kalman Gain etc.
@@ -621,7 +626,7 @@ class LHC_single():
         return self.psi_prot(t, t0, t_M) - k * self.psi_prem(t, t0, t_M)
 
 
-    def CDS_model(self,t_obs, T_M_grid, CDS_obs, t0=None, X=None,Y=None,Z=None):
+    def CDS_model(self,t_obs, T_M_grid, CDS_obs, t0=None, X_in=None,Y_in=None,Z_in=None):
         # Get latent states.
         # If t0 is none, assume initial date is today
         if t0 is None:
@@ -646,11 +651,14 @@ class LHC_single():
 
         # New get states functionality:
         # Numba code to generate matrices to solve for.
-        if (X is None) | (Y is None) :
-            X,Y,Z = get_states(lhc, t_obs, T_M_grid, CDS_obs,self.X0)
+        # If nones, need to overwrite
+        if (X_in is None) | (Y_in is None) :
+            X_in,Y_in, Z = get_states(lhc, t_obs, T_M_grid, CDS_obs,self.X0)
 
-        if Z is not None:
-            X,Y = self.kalman_X_Y(t_obs,Z)
+        if Z_in is not None:
+            X_in,Y_in = self.kalman_X_Y(t_obs,Z_in)
+
+        X,Y = X_in,Y_in
 
         #print('Done Getting Z,Y,X')
         state_vec = np.vstack([Y, X])
@@ -663,14 +671,14 @@ class LHC_single():
     def get_states(self,t_obs, T_M_grid, CDS_obs):
         # Get latent states.
         t0 = t_obs
-        mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
-                                for i in range(0,int(np.max(t0)+1))]).flatten()
-        # Ensure mat_actual is sorted
-        mat_actual_sorted = np.sort(mat_actual)
+        # mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
+        #                         for i in range(0,int(np.max(t0)+1))]).flatten()
+        # # Ensure mat_actual is sorted
+        # mat_actual_sorted = np.sort(mat_actual)
 
-        # For each element in t_mat_grid, find the smallest mat_actual that is >= element
-        t0 = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
-                                        for val in t0.flatten()]).reshape(t0.shape)
+        # # For each element in t_mat_grid, find the smallest mat_actual that is >= element
+        # t0 = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
+        #                                 for val in t0.flatten()]).reshape(t0.shape)
 
         kappa, theta, gamma1 = self.kappa,self.theta,self.gamma1[0]
         r = self.r
@@ -755,14 +763,7 @@ class LHC_single():
         )
         # constraints = self.build_constraints(self.m)
 
-        # result = minimize(
-        #     fun=self.objective,
-        #     x0=flat_init,
-        #     args=(t_obs, T_M_grid, CDS_obs),
-        #     method='SLSQP',
-        #     constraints=constraints,
-        #     tol = 1e-05
-        # )
+
 
         if result.success:
             print(f"Optimization succeeded, params:{result.x}, objective: {result.fun}")
@@ -871,7 +872,8 @@ class LHC_single():
         # Define the parameters already to be able to look over them
         gamma1 = params[2*lhc_p.m]
         params_p = params[2*lhc_p.m+1:]
-        lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,gamma1,lhc_p)
+        kappa_p,theta_p, sigma, sigma_err = params_p[:lhc_p.m],params_p[lhc_p.m:2*lhc_p.m],params_p[2*lhc_p.m:3*lhc_p.m] ,params_p[-1]
+        # lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,gamma1,lhc_p)
         params_q = params[:2*lhc_p.m+1]
         kappa, theta, gamma1 = params_q[:lhc_p.m],params_q[lhc_p.m:2*lhc_p.m], params_q[-1]
 
@@ -916,7 +918,6 @@ class LHC_single():
         mu1 = self.solve_mu1(kappa_p, theta_p, gamma1)
         mu = self.compute_stationary(kappa_p,theta_p,lhc_q.m,gamma1,mu1= mu1)
         pred_Xn = mu #drift_term(mu,lhc_p,Delta) #mu
-        # Z0[1:] + (lhc_p.b.flatten() + (lhc_p.beta + np.identity(lhc_p.beta.shape[0]) * (-lhc_p.gamma @ Z0[1:])) @ Z0[1:])*Delta
         # Just set the covariance guess to the innovated one.
         P_state = np.array([mu[i] * (1 - mu[i]) for i in range(0,mu.shape[0]) ])
         # Initial Cov Prediction.Z0
@@ -928,15 +929,10 @@ class LHC_single():
         
         # Run algo. 
         for n in range(0,n_obs):
-            # if n == 0:
-            #     pred_Xm1 = mu
             Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_cds(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
                                                              t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
-            # Zn[n,:], vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_lin(pred_Xn,pred_Pn,cds_value,R_k,
-            #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
             Xn_extended = np.append([1],Xn[n,:])
             Zn[n,:] =  cds_fun(lhc_q,Xn_extended,t_obs[n],t0[n],T_M_grid[:,n])
-            # pred_Xm1 = pred_Xn.copy()
 
             # add additional check until parameters are figured out
             if (np.any(Xn<0) |np.any(Xn>1)):
@@ -949,9 +945,15 @@ class LHC_single():
             except:
                 S_inv = np.linalg.pinv(S_k)
 
-            log_likelihood += - 0.5 * (S_k.shape[0] * np.log(2*np.pi) + np.log(det_S) +
-                                        vn.T @ S_inv @ vn
-            )
+            if det_S <= 0 or not np.isfinite(det_S):
+                return 1e12, Xn, Zn, Pn  # immediately penalize invalid covariance
+
+            ll_step = -0.5 * (S_k.shape[0] * np.log(2*np.pi) + np.log(np.abs(det_S)) + vn.T @ S_inv @ vn)
+
+            if not np.isfinite(ll_step) or np.abs(ll_step) > 1e10:
+                return 1e12, Xn, Zn, Pn
+
+            log_likelihood += ll_step
 
             if (n < n_obs - 1): # Not sensible to predict further.
                 Delta = t_obs[n+1] - t_obs[n] # Only apprx for now. Move to loop maybe.
@@ -963,21 +965,11 @@ class LHC_single():
                 # Then update the predictions:
                 # linear version
                 # Do prediction directly, no function
-                Xn_prev = Xn[n-1,:]
-                if n == 0:
-                    Xn_prev = pred_Xn # only sensible guess in this case
                 # Taylor approximate the transition. 
-                # pred_Xn = drift_term(Xn_prev,lhc_p,Delta)+(
-                #     drift_deriv_term(Xn_prev,lhc_p,Delta)@ (Xn[n,:]-Xn_prev))
                 # Pure Euler
                 pred_Xn = drift_term(Xn[n,:],lhc_p,Delta) 
-
                 P_cov = drift_deriv_term(Xn[n,:],lhc_p,np.sqrt(Delta))
                 pred_Pn =  P_cov @ Pn[n,:,:] @ P_cov.T + Q_k
-
-                # Straight euler.
-                # Matrix,const = drift_term(Xn_prev,lhc_p,Delta)
-                # pred_Xn, pred_Pn = prediction_step_lin(Xn[n,:],Pn[n,:,:],Matrix,const,Q_k)
 
         return - log_likelihood, Xn, Zn, Pn 
 
@@ -989,71 +981,175 @@ class LHC_single():
         params_q = params[:2*lhc_p.m+1]
         kappa, theta, gamma1 = params_q[:lhc_p.m],params_q[lhc_p.m:2*lhc_p.m], params_q[-1]
 
-            # --------- HARD CONSTRAINT CHECKS ---------
-        # 1. Positivity - must hold for all params. We use hard constraint from paper.
-        if np.any(params <= 0):
-            return 1e12  # infeasible, huge loss
-
-        # 2. Custom constraints
-
-        g1 = theta[-1] * kappa[-1]  - sigma[-1]**2/2 
-        if g1 < 0:
-            return 1e12
-
-        g2 = theta_p[-1] * kappa_p[-1]  - sigma[-1]**2/2 
-        if g2 < 0:
-            return 1e12
-
-
-        for i in range(lhc_p.m):
-            g3 = gamma1 - kappa[i] + kappa[i] * theta[i] + sigma[i]**2/2
-            if g3 > 0:   
-                return 1e12
-
-        for i in range(lhc_p.m):
-            g4 = gamma1 - kappa_p[i] + kappa_p[i] * theta_p[i]   + sigma[i]**2/2
-            if g4 > 0:
-                return 1e12
-
         neg_loglik,Xn, Zn, Pn = self.kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,X0)
+
         return neg_loglik
 
-    def get_kalman_params(self,t_obs, T_M_grid, CDS_obs,x0,lhc_p):
+    def nonlinear_constraints(self, params, lhc_p):
+        """
+        Vector-valued constraint function for NonlinearConstraint.
+        Returns array `cons` such that cons >= 0 are feasible.
+        If params can't be unpacked properly, returns a negative array (infeasible).
+        """
+        m = int(lhc_p.m)
+        # expected number of constraints: g1, g2 and 2*m for g3,g4 converted -> total 2 + 2*m
+        n_cons = 2 + 2 * m
+
+        try:
+            params = np.asarray(params, dtype=float)
+            # follow the same mapping you used in kalman_wrapper / kalmanfilter_opt
+            # params_q covers kappa (m), theta (m), gamma1 (1) => length 2*m + 1
+            if params.size < 2 * m + 1:
+                raise ValueError(f"params too short for params_q: got {params.size}, need {2*m+1}")
+
+            params_q = params[:2*m + 1]
+            gamma1 = float(params_q[-1])
+            kappa = np.asarray(params_q[:m], dtype=float)
+            theta = np.asarray(params_q[m:2*m], dtype=float)
+
+            # remainder is params_p; this is where your project-specific parsing belongs
+            params_p = params[2*m + 1:]
+            # IMPORTANT: use your build_P_params function to produce consistent kappa_p, theta_p, sigma, sigma_err
+            # build_P_params(params_p, gamma1, lhc_p) should return (lhc_p_obj, kappa_p, theta_p, sigma, sigma_err)
+            lhc_p_tmp, kappa_p, theta_p, sigma, sigma_err = build_P_params(params_p, gamma1, lhc_p)
+
+            # ensure arrays
+            kappa_p = np.asarray(kappa_p, dtype=float)
+            theta_p = np.asarray(theta_p, dtype=float)
+            sigma = np.asarray(sigma, dtype=float)
+
+            # safety checks on sizes
+            if kappa.size != m or theta.size != m or kappa_p.size != m or theta_p.size != m or sigma.size < m:
+                raise ValueError("Unpacked parameter arrays have wrong sizes.")
+
+        except Exception as e:
+            # If something goes wrong, return an infeasible vector (all negative numbers)
+            # This prevents the optimizer from crashing while marking the candidate infeasible.
+            if getattr(self, "debug", False):
+                print("nonlinear_constraints unpack error:", repr(e))
+            return np.full((n_cons,), -1e6, dtype=float)
+
+        # Build constraints: all should be >= 0
+        cons = []
+
+        # g1 >= 0  -> theta[-1]*kappa[-1] - sigma[-1]^2/2 >= 0
+        try:
+            cons.append(theta[-1] * kappa[-1] - 0.5 * (sigma[-1] ** 2))
+        except Exception as e:
+            if getattr(self, "debug", False):
+                print("g1 eval error", e)
+            cons.append(-1e6)
+
+        # g2 >= 0  -> theta_p[-1] * kappa_p[-1] - sigma[-1]^2/2 >= 0
+        try:
+            cons.append(theta_p[-1] * kappa_p[-1] - 0.5 * (sigma[-1] ** 2))
+        except Exception as e:
+            if getattr(self, "debug", False):
+                print("g2 eval error", e)
+            cons.append(-1e6)
+
+        # g3 <= 0 -> -g3 >= 0
+        for i in range(m):
+            try:
+                g3 = gamma1 - kappa[i] + kappa[i] * theta[i] + 0.5 * (sigma[i] ** 2)
+                cons.append(-g3)
+            except Exception:
+                cons.append(-1e6)
+
+        # g4 <= 0 -> -g4 >= 0
+        for i in range(m):
+            try:
+                g4 = gamma1 - kappa_p[i] + kappa_p[i] * theta_p[i] + 0.5 * (sigma[i] ** 2)
+                cons.append(-g4)
+            except Exception:
+                cons.append(-1e6)
+
+        cons = np.asarray(cons, dtype=float)
+
+        # replace any non-finite entries with a large negative number (infeasible)
+        if not np.all(np.isfinite(cons)):
+            if getattr(self, "debug", False):
+                print("nonlinear_constraints produced non-finite values:", cons)
+            cons = np.nan_to_num(cons, nan=-1e6, posinf=1e6, neginf=-1e6)
+
+        # finally return array with shape (n_cons,)
+        if cons.size != n_cons:
+            # fallback to infeasible vector
+            if getattr(self, "debug", False):
+                print(f"unexpected cons size {cons.size}, expected {n_cons}")
+            return np.full((n_cons,), -1e6, dtype=float)
+
+        return cons
+
+
+
+    def get_kalman_params(self, t_obs, T_M_grid, CDS_obs, x0, lhc_p,base_seed):
         t0 = t_obs
-        # mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
-        #                         for i in range(0,int(np.max(t0)+1))]).flatten()
-        # # Ensure mat_actual is sorted
-        # mat_actual_sorted = np.sort(mat_actual)
+        n = lhc_p.m
+        bounds = (
+            [(1e-6, 1)] * n +     # kappa
+            [(1e-6, 1)] * n +     # theta
+            [(0.001, 1)] +        # gamma1
+            [(1e-6, 1)] * n +     # kappa_p
+            [(1e-6, 1)] * n +     # theta_p
+            [(1e-6, 1)] * n +     # sigma (assuming per-factor vol)
+            [(1e-6, 0.5)]         # sigma_err
+        )
+        nlc = NonlinearConstraint(lambda x: self.nonlinear_constraints(x, lhc_p), 0, np.inf)
 
-        # # For each element in t_mat_grid, find the smallest mat_actual that is >= element
-        # t0 = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
-        #                                 for val in t0.flatten()]).reshape(t0.shape)
+        # Global optimizer: few iters. Do on supsed only. 
+        result = differential_evolution(
+            func=self.kalman_wrapper,
+            bounds=bounds,
+            constraints=(nlc,),
+            args=(t_obs[::5], t0[::5], T_M_grid[:, ::5], CDS_obs[::5, :], lhc_p, self.X0),
+            # args=(t_obs, t0, T_M_grid, CDS_obs, lhc_p, self.X0),
 
-
-        result = minimize(
-            fun=self.kalman_wrapper,
-            x0=x0,
-            args=(t_obs, t0, T_M_grid, CDS_obs,lhc_p,self.X0),
-            method='Nelder-Mead',
-            # method = 'L-BFGS-B', # Finite difference method.
-            options = {
-                "xatol": 1e-4,
-                "fatol": 1e-4,
-                "maxiter": 500,
-                "disp": True
-            }
+            maxiter=200,          # drastically reduced
+            popsize=5,           # smaller population
+            tol=1e-4,            # looser tolerance
+            workers=1,
+            updating='immediate',
+            polish=False,
+            seed=base_seed
         )
 
-        # Then ready to optimize
+        # If DE failed or hit constraint penalties, bail early
+        if result.fun >= 1e12:
+            return result.x, 0, 0, 0
+
+        # # --- Local Refinement ---
+        # print("🔹 Refining with local optimizer (L-BFGS-B)...")
+
+        # x0 = np.array([4.25432924e-01, 1.91409243e-01, 7.76117518e-01, 4.18969385e-01,
+        #                 7.58651767e-02, 6.20206261e-01, 3.82640770e-01, 5.86713855e-01,
+        #                 4.39255843e-01, 1.89859019e-01, 2.64752859e-01, 3.10152215e-04])
+
+        # --- Local Fine Optimization ---
+
+        # local_result = minimize(
+        #     fun=self.kalman_wrapper,
+        #     x0=x0,
+        #     args=(t_obs, t0, T_M_grid, CDS_obs, lhc_p, self.X0),
+        #     method='trust-constr',          # supports nonlinear constraints
+        #     bounds=bounds,
+        #     constraints=[nlc],
+        #     options={'maxiter': 300, 'gtol': 1e-6, 'verbose': 2}
+        # )
+        # optikkm_params = x0
         optim_params = result.x
         self.kalman_obj = result.fun
-        if self.kalman_obj >=1e12:
+
+
+        # --- Evaluate Kalman filter at final parameters ---
+        if self.kalman_obj >= 1e12:
             return optim_params, 0, 0, 0
         else:
-            neg_log_lik, Xn,Zn, Pn = self.kalmanfilter_opt(optim_params,t_obs,t0,T_M_grid,
-                                                                    CDS_obs,lhc_p,self.X0)
-            return optim_params, Xn,Zn, Pn
-
+            neg_log_lik, Xn, Zn, Pn = self.kalmanfilter_opt(
+                optim_params, t_obs, t0, T_M_grid, CDS_obs, lhc_p, self.X0
+            )
+            return optim_params, Xn, Zn, Pn
+        
     def run_n_kalmans(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20):
         # Define grid of values. 
         current_objective = 1e10 #very high objective.
@@ -1080,17 +1176,18 @@ class LHC_single():
             x0 = np.concatenate([x0_Q,x0_P])
 
             # Test several random points. 
-            optim_params,  Xn,Zn, Pn= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0,lhc_p)
+            optim_params,  Xn,Zn, Pn= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0,lhc_p,
+                                                             base_seed=base_seed + i)
             # Test new constraints
 
-            if (self.kalman_obj < current_objective):
-                print(f"New optimal parameters at iteration {i+1}.")
-                current_objective = self.kalman_obj
-                out_params, Xn_out,Zn_out, Pn_out = optim_params, Xn,Zn, Pn
-                self.unflatten_params(out_params[:x0_Q.shape[0]])
+            # if (self.kalman_obj < current_objective):
+            #     print(f"New optimal parameters at iteration {i+1}.")
+            #     current_objective = self.kalman_obj
+            #     out_params, Xn_out,Zn_out, Pn_out = optim_params, Xn,Zn, Pn
+            #     self.unflatten_params(out_params[:x0_Q.shape[0]])
 
         # Set new optimal parameters. 
-        return  out_params,  Xn_out,Zn_out, Pn_out
+        return  optim_params,  Xn,Zn, Pn # out_params,  Xn_out,Zn_out, Pn_out
 
     # Transform Kalman Z parameters:
     def kalman_X_Y(self,t_obs,Z):
@@ -1207,6 +1304,10 @@ class LHC_single():
         if P_params is not None:
             lhc_p = self.build_P_params(P_params,self.gamma1)
 
+        # Get LHC_Q for pricing
+        lhc = rebuild_lhc_struct(self.kappa, self.theta, self.gamma1[0], self.r,
+                            self.Y_dim, self.delta, self.tenor)
+
         # N prices are comuted and averaged MC
         N_strikes = strikes.shape[0]
         prices = np.zeros(shape = (N,N_strikes))
@@ -1227,21 +1328,21 @@ class LHC_single():
                 # Loop over strikes here, to save simul time later on (also same randomness)
                 for j in range(N_strikes):
                     # Find value of option using the strike. This is the payoff. 
-                    Value_CDS = self.psi_cds(t0, t0, t_M, strikes[j]) @ latent_end
+                    Value_CDS = psi_cds(lhc,t0, t0, t_M, strikes[j]) @ latent_end
                     # Discount back. Also, divide by a^TY_t. If t=0, then not matter.
                     # Note still an option, so only enter if positive. 
                     prices[i,j] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0) / S[0]
             # Achieve a running mean also for convergence assessment.
             prices_MC_hist[i, :] = np.mean(prices[:i+1, :], axis=0)
             seed += 1
-
+        print(f'CDSO done')
         price_MC = np.mean(prices,axis=0)
 
         return prices_MC_hist,price_MC
     
 
     # Simulate digital Barrier in the model. 
-    def get_digital_barrier_price_MC(self,t,t0,t_M,T,barrier,chi0,N,M,seed=1000, P_params=None):
+    def get_digital_barrier_price_MC(self,t,t0,t_M,T,barriers,chi0,N,M,seed=1000, P_params=None):
         '''
         t: Time to price at
         t0: Start of CDS.
@@ -1253,46 +1354,57 @@ class LHC_single():
             lhc_p = self.build_P_params(P_params,self.gamma1)
 
         # N prices are comuted and averaged MC
-        prices = np.zeros(shape = N)
+        N_strikes = barriers.shape[0]
+        prices = np.zeros(shape = (N,N_strikes))
+        prices_MC_hist = np.zeros(shape = (N,N_strikes))
+        lhc = rebuild_lhc_struct(self.kappa, self.theta, self.gamma1[0], self.r,
+                            self.Y_dim, self.delta, self.tenor)
         for i in range(N):
             # Get Latent states. Simulate path of CDS till mat.
             T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed)
+            Xn = X_Q[:,self.Y_dim:]
+            Yn = X_Q[:,0]
             # Retrieve price path...
-            CDS_sim = self.CDS_model(T_return, T_M_grid=(T_return + t_M).T,CDS_obs=None,t0=t0,Z=X_Q)
-            S = X_Q[:,0]
+            T_M_grid = ((T_return + t_M)).reshape((1,T_return.shape[0]))
+            # Here formula is the t_obs according to formula
+            CDS_sim = get_CDS_Model(T_return, T_return+t0, T_M_grid, X_Q.T, lhc )
+            S = Yn
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
-            U = uniform.rvs()
+            U = uniform.rvs(random_state = seed)
             # If survival falls below U at any points, default happened prior to T. 
             # Should be zero, but depends on barrier. Default happens at some point below..
             default_event =  S <= U
             if np.any(default_event):
                 # In this instance, default has happened as some point. Find index. 
-                idx = np.where(default_event)
+                idx = np.argmax(np.where(default_event))
                 # Get path maximum up to the point:
-                max_cds_to_default = np.max(CDS_sim[:idx])
-                if max_cds_to_default >= barrier:
-                    # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
-                    prices[i] = np.exp(-self.r * (T - t))
-                else:
-                    # If not above, there is zero payoff.
-                    prices[i] = 0
+                max_cds_to_default = np.max(CDS_sim[:idx+1])
+                for b_idx in range(N_strikes):
+                    if max_cds_to_default >= barriers[b_idx]:
+                        # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
+                        prices[i,b_idx] = np.exp(-self.r * (T - t))
+                    else:
+                        # If not above, there is zero payoff.
+                        prices[i,b_idx] = 0
             # Else - no default happened, but same logic as before.
             else: 
                 # Get path maximum up to expiry:
                 max_cds_to_default = np.max(CDS_sim)
-                if max_cds_to_default >= barrier:
-                    # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
-                    prices[i] = np.exp(-self.r * (T - t))
-                else:
-                    # If not above, there is zero payoff.
-                    prices[i] = 0
-            
+                for b_idx in range(N_strikes):
+                    if max_cds_to_default >= barriers[b_idx]:
+                        # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
+                        prices[i,b_idx] = np.exp(-self.r * (T - t))
+                    else:
+                        # If not above, there is zero payoff.
+                        prices[i,b_idx] = 0
+            prices_MC_hist[i, :] = np.mean(prices[:i+1, :], axis=0)
             seed += 1
-        price_MC = np.mean(prices)
+        print(f'Digital done')
+        price_MC = np.mean(prices,axis = 0)
 
-        return price_MC
+        return prices_MC_hist,price_MC
     
-    # Simulate digital Barrier in the model. 
+    # Simulate Lookback in the model. 
     def get_lookback_price_MC(self,t,t0,t_M,T,chi0,N,M,seed=1000, P_params=None):
         '''
         t: Time to price at
@@ -1300,34 +1412,47 @@ class LHC_single():
         t_M: Maturity of CDS
         T: Maturity of option. Needs to satisfy T<t_m
         '''
+        prices = np.zeros(shape = N)
+        prices_MC_hist = np.zeros(shape = N)
+        cds_min =  np.zeros(shape = N)
         # If p params specific (Sigma specific), se can calculate for differnt sigma
         if P_params is not None:
             lhc_p = self.build_P_params(P_params,self.gamma1)
-
+        lhc = rebuild_lhc_struct(self.kappa, self.theta, self.gamma1[0], self.r,
+                            self.Y_dim, self.delta, self.tenor)
         # N prices are comuted and averaged MC
         prices = np.zeros(shape = N)
         for i in range(N):
             # Get Latent states. Simulate path of CDS till mat.
-            T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed+i)
+            T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed)
             # Retrieve price path...
-            CDS_sim = self.CDS_model(T_return, T_M_grid=(T_return + t_M).T,CDS_obs=None,t0=t0,Z=X_Q)
+            T_M_grid = ((T_return + t_M)).reshape((1,T_return.shape[0]))
+            CDS_sim = get_CDS_Model(T_return, T_return+t0, T_M_grid, X_Q.T, lhc )
+            if np.any(CDS_sim == np.nan):
+                print('Nan value')
+
             S = X_Q[:,0]
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
-            U = uniform.rvs()
+            U = uniform.rvs(random_state = seed)
             # If survival falls below U at any points, default happened prior to T - No payoff
             default_event =  S <= U
             if np.any(default_event):
                 prices[i] = 0
+                # set min to zero here
+                cds_min[i] =0  # np.min(CDS_sim[:i])
             # Else - no default happened
             else: 
                 # Get path minimum of CDS:
-                min_cds_to_default = np.min(CDS_sim)
-                prices[i] = np.exp(-self.r * (T - t)) * (CDS_sim[-1] - min_cds_to_default)
-            
+                cds_min[i]  = np.min(CDS_sim)
+                prices[i] = np.exp(-self.r * (T - t)) * (CDS_sim.flatten()[-1] - cds_min[i] )
+            prices_MC_hist[i] = np.mean(prices[:i+1])
+        
             seed += 1
+        print(f'Loockback done')
+        # Final price
         price_MC = np.mean(prices)
 
-        return price_MC
+        return prices_MC_hist,price_MC,cds_min
     
 
 ## Pricing numba functions:

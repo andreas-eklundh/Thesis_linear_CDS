@@ -1,5 +1,4 @@
 #### Purpose: Try to see if prices/ payoffs from Filipovic Ackerer can be mimicked.
-
 from Models.LHCModels.LHC_single import LHC_single
 import numpy as np
 import matplotlib.pyplot as plt

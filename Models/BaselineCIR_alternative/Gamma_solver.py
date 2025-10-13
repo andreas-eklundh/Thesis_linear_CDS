@@ -9,18 +9,13 @@ from scipy.optimize import minimize, NonlinearConstraint
 import matplotlib.dates as mdates
 
 
-def _get_default_grid(u, t_grid):
-    """Return time since previous payment date (in same time units as t_grid).
-       If u <= first point, return 0.0.
-       t_grid must be sorted and include the start time t0.
-    """
+def _get_default_grid( u, t_grid):
     if u <= t_grid[0]:
         return 0.0
-    for idx in range(len(t_grid) - 1):
-        if (u > t_grid[idx]) and (u <= t_grid[idx + 1]):
-            return (u - t_grid[idx])
-    # if beyond last payment date:
-    return max(0.0, u - t_grid[-1])
+    if u >= t_grid[-1]:
+        return t_grid[-1] - t_grid[-2]  # last interval length
+    idx = np.searchsorted(t_grid, u) - 1
+    return u - t_grid[idx]
 
 class DeterministicGamma:
     def __init__(self, r, delta, tenor=1.0):
@@ -81,8 +76,13 @@ class DeterministicGamma:
             survival = np.exp(-(self.Gamma_fun(params, u, t_mats) - self.Gamma_fun(params, t, t_mats)))
             gamma_u = self.gamma_fun(params, u, t_mats)
             return accrual * disc * survival * gamma_u
-
-        I2, _ = quad(I2_integrand, t0, t_M, epsabs=1e-9, epsrel=1e-9)
+        eps = 1e-4
+        #I2 = quad(I2_integrand, t0, t0+eps, limit=200)[0] + quad(I2_integrand, t0+eps, t_M, limit=200)[0]
+        I2 = 0.0
+        for i in range(len(t_grid) - 1):
+            a, b = t_grid[i], t_grid[i + 1]
+            I2 += quad(I2_integrand, a, b, epsabs=1e-8, epsrel=1e-8, limit=100)[0]
+        #I2, _ = quad(I2_integrand, t0, t_M, epsabs=1e-9, epsrel=1e-9)
 
         # PROTECTION LEG
         def prot_integrand(u):
@@ -112,6 +112,7 @@ class DeterministicGamma:
                 trial = params + [lam] + [0.0] * (n - j - 1)
                 I1, I2, prot = self.get_CDS_deterministic(t0, t0, T, trial, t_grid_payments, t_mats)
                 return cds_obs[j] * (I1 + I2) - prot
+                #return cds_obs[j] * (I1 ) - prot
 
             # bracket search for brentq: expand upper bound until sign change or limit
             a = 1e-10

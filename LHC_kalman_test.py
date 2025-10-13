@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+
 t_grid = [0 + 0.25* i for i in range(0, int(10 / 0.25)+1)]
 
 
@@ -29,14 +30,14 @@ t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len
 # For a quarterly CDS, following effective payment dates.¨ (do actual calcs at some point)
 # So actual termination dates.
 # Needs to be modified when generalized.
-mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
-                        for i in range(0,int(np.max(t_mat_grid)+1))]).flatten()
-# Ensure mat_actual is sorted
-mat_actual_sorted = np.sort(mat_actual)
+# mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
+#                         for i in range(0,int(np.max(t_mat_grid)+1))]).flatten()
+# # Ensure mat_actual is sorted
+# mat_actual_sorted = np.sort(mat_actual)
 
-# For each element in t_mat_grid, find the smallest mat_actual that is >= element
-t_mat_grid = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
-                                for val in t_mat_grid.flatten()]).reshape(t_mat_grid.shape)
+# # For each element in t_mat_grid, find the smallest mat_actual that is >= element
+# t_mat_grid = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
+#                                 for val in t_mat_grid.flatten()]).reshape(t_mat_grid.shape)
 
 
 # So effective date at first possible date above 
@@ -62,13 +63,13 @@ lhc.initialise_LHC(Y_dim=1,X_dim=2,X0=0.5,rng=None)
 ### TODO: Try to implement a totally basic exapmple CF 40.
 
 # Test several random points. 
-optim_params,  Xn,Zn, Pn= lhc.run_n_kalmans(t, t_mat_grid, CDS_obs,base_seed = 206,n_restarts=5)
+optim_params,  Xn,Zn, Pn= lhc.run_n_kalmans(t, t_mat_grid, CDS_obs,base_seed = 300,n_restarts=1)
 Xn_kalman,Yn_kalman = lhc.kalman_X_Y(t,Xn)
 
 print(f'Optimal Paramerters {optim_params}')
 kappa, theta, gamma1 = optim_params[:lhc.m],optim_params[lhc.m:2*lhc.m], optim_params[2*lhc.m]
 
-default_intensity = lhc.default_intensity(Xn[:,1:].T,Xn[:,0])
+default_intensity = lhc.default_intensity(Xn_kalman.T,Yn_kalman)
 #mpr,girsanov = lhc.get_MPR(optim_params,Xn[:,0],Xn[:,1:].T,CDS_obs)
 
 np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Kalman_resultsLHC.npz",
@@ -195,42 +196,42 @@ plt.close(fig)
 
 
 ### Option pricing. Approximate payoff function:
-t_start = 1
-T_option = t_start + 5
-strike_spreads = np.array([250,300,350]) / 10000
-n_poly = np.array([1,5,30])
+# t_start = 1
+# T_option = t_start + 5
+# strike_spreads = np.array([250,300,350]) / 10000
+# n_poly = np.array([1,5,30])
 
-M = 1000 # (how continous we make the plot)
-for k in strike_spreads:
-    fig, ax = plt.subplots(figsize=(10,6))
-    # Get lower bounds on z.
-    b_min,b_max = lhc.get_bBounds(t_start,T_option,k)
-    # Create some grid fr plotting,
-    plot_grid = np.array([b_min + i*(b_max-b_min)/M for i in range(0,M+1)])
-    for n in n_poly:
-        Y_t = Yn[-1] 
-        price = np.array([lhc.PriceCDS(z,n,t=0,t0=t_start,t_M=T_option,k=k,Y=Y_t) for z in plot_grid])
-        ax.plot(plot_grid,price, label=f"Price CDSO, n={n}")
-        print(f"Done with n={n},k={k}")
-    ax.set_xlabel("z")
-    ax.set_ylabel("Payoff")
-    ax.set_title(f"Estimated payoff, k={k}")
-    ax.legend()
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(os.path.join(save_path, f"CDSO_payofffunc_k_{k}_Kalman.png"), dpi=150)
-    plt.close(fig)
+# M = 1000 # (how continous we make the plot)
+# for k in strike_spreads:
+#     fig, ax = plt.subplots(figsize=(10,6))
+#     # Get lower bounds on z.
+#     b_min,b_max = lhc.get_bBounds(t_start,T_option,k)
+#     # Create some grid fr plotting,
+#     plot_grid = np.array([b_min + i*(b_max-b_min)/M for i in range(0,M+1)])
+#     for n in n_poly:
+#         Y_t = Yn[-1] 
+#         price = np.array([lhc.PriceCDS(z,n,t=0,t0=t_start,t_M=T_option,k=k,Y=Y_t) for z in plot_grid])
+#         ax.plot(plot_grid,price, label=f"Price CDSO, n={n}")
+#         print(f"Done with n={n},k={k}")
+#     ax.set_xlabel("z")
+#     ax.set_ylabel("Payoff")
+#     ax.set_title(f"Estimated payoff, k={k}")
+#     ax.legend()
+#     ax.legend()
+#     fig.tight_layout()
+#     fig.savefig(os.path.join(save_path, f"CDSO_payofffunc_k_{k}_Kalman.png"), dpi=150)
+#     plt.close(fig)
 
 
 
-# Simulation price of CDS. Possible as known Sigma. Need to give X0 as argument.
-price_strikes = np.zeros(strike_spreads.shape[0])
-chi0 = np.append([Yn[-1]],Xn[-1,:])
-for idx,k in enumerate(strike_spreads):
-    price_strikes[idx] = lhc.get_cdso_pric_MC(t=0,t0=t_start,t_M=T_option,
-                             strike=k, chi0=chi0,N=500,M=1000)
+# # Simulation price of CDS. Possible as known Sigma. Need to give X0 as argument.
+# price_strikes = np.zeros(strike_spreads.shape[0])
+# chi0 = np.append([Yn[-1]],Xn[-1,:])
+# for idx,k in enumerate(strike_spreads):
+#     price_strikes[idx] = lhc.get_cdso_pric_MC(t=0,t0=t_start,t_M=T_option,
+#                              strike=k, chi0=chi0,N=500,M=1000)
 
-print(f'CDSO prices: {price_strikes}')
+# print(f'CDSO prices: {price_strikes}')
 
 
 

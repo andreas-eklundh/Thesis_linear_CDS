@@ -29,14 +29,14 @@ t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len
 # For a quarterly CDS, following effective payment dates.¨ (do actual calcs at some point)
 # So actual termination dates.
 # Needs to be modified when generalized.
-mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
-                        for i in range(0,int(np.max(t_mat_grid)+1))]).flatten()
-# Ensure mat_actual is sorted
-mat_actual_sorted = np.sort(mat_actual)
+# mat_actual = np.array([[0.2137 + i, 0.4658 + i,0.7178 + i,0.9671+i ] 
+#                         for i in range(0,int(np.max(t_mat_grid)+1))]).flatten()
+# # Ensure mat_actual is sorted
+# mat_actual_sorted = np.sort(mat_actual)
 
-# For each element in t_mat_grid, find the smallest mat_actual that is >= element
-t_mat_grid = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
-                                for val in t_mat_grid.flatten()]).reshape(t_mat_grid.shape)
+# # For each element in t_mat_grid, find the smallest mat_actual that is >= element
+# t_mat_grid = np.array([mat_actual_sorted[np.searchsorted(mat_actual_sorted, val, side='left')] 
+#                                 for val in t_mat_grid.flatten()]).reshape(t_mat_grid.shape)
 
 
 # So effective date at first possible date above 
