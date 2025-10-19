@@ -6,7 +6,6 @@ from scipy.integrate import solve_ivp
 from scipy.linalg import expm 
 from itertools import combinations_with_replacement, product
 import re
-
 from scipy.optimize import lsq_linear 
 from numba import njit, float64, int64 
 from numba.experimental import jitclass 
@@ -291,13 +290,13 @@ def cds_deriv(lhc, chi, t,t0, t_mat_grid):
                     A, A_star, A_star_inv,
                     id_mat, r, m, Y_dim,
                     delta, tenor) = lhc 
-    result = np.zeros((t_mat_grid.shape[0],m), dtype=np.float64)
+    result = np.zeros((t_mat_grid.shape[0],m+Y_dim), dtype=np.float64)
     for i in range(t_mat_grid.shape[0]):
         # Pass a scalar from the array X
         prem = psi_prem(lhc,t,t0,t_mat_grid[i])
         prot = psi_prot(lhc,t,t0,t_mat_grid[i])
-        term1 = prot[1:] / np.dot(prem, chi)
-        term2 = np.dot(prot, chi) / np.dot(prem, chi)**2 *prem[1:] 
+        term1 = prot / np.dot(prem, chi)
+        term2 = np.dot(prot, chi) / np.dot(prem, chi)**2 *prem
         result[i,:] = term1 - term2
         
     return result
@@ -339,11 +338,11 @@ def cds_value(lhc, t,t0, t_mat_grid,CDS_grid):
 # standard kalman with previous in denom.
 @njit
 def update_step_cds(X_pred, P_pred, h,h_p, R_k, t_obs,t0, t_mats, lhc, CDS_k):
-    pred_Xn = np.append([1],X_pred) # Add one for computations of cds spread and derivative
+    # pred_Xn = np.append([1],X_pred) # Add one for computations of cds spread and derivative
     # Step 3: Mean prediction, covariance, Kalman Gain etc.
-    mu_k = h(lhc, pred_Xn, t_obs,t0, t_mats) 
+    mu_k = h(lhc, X_pred, t_obs,t0, t_mats) 
     
-    H_x = h_p(lhc, pred_Xn, t_obs,t0, t_mats)
+    H_x = h_p(lhc, X_pred, t_obs,t0, t_mats)
     # covariance
     S_k = H_x @ P_pred @ H_x.T + R_k
     det_S = np.linalg.det(S_k)
@@ -507,7 +506,7 @@ def get_states(lhc, t_obs, T_M_grid, CDS_obs,X0):
         if time_idx == 0:
             Y[time_idx]=1 
         else:
-            Y[time_idx] = Y_prev + dt * (gamma.flatten() @ X_prev)
+            Y[time_idx] = Y_prev + dt * (lhc.gamma.flatten() @ X_prev)
         
         X[:,time_idx] = Y[time_idx] * Z[:,time_idx]
 
@@ -571,7 +570,7 @@ def compute_stationary(kappa, theta, m, gamma1, mu1):
 
 # One kalman filter for optimizing and one for outputting.
 @njit
-def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
+def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0,G_n,p_idx_matrix):
     (a, c, gamma, b, beta,
                     A, A_star, A_star_inv,
                     id_mat, r, m, Y_dim,
@@ -597,7 +596,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     # Only A_trans utilzes new params
     _,Sigma,R_k = build_matrices(lhc_p,sigma,sigma_err,n_mat)
 
-    L = int(m)
+    L = int(m+Y_dim)
     log_likelihood = 0
 
     # Just to set Xn,Pn, but not needed to be thse vals.
@@ -615,11 +614,11 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     Pn = np.zeros((n_obs,L,L))
     # Initial Predictions of means and cov
     # Only criteria on mu1 - mu1 < k/kappa. Set to theta
+    Y0 = 1
     mu1 = solve_mu1(kappa_p, theta_p, gamma1)
     mu = compute_stationary(kappa_p,theta_p,m,gamma1,mu1= mu1)
-    # Bound mu
-    # mu = np.clip(mu,0,1)
-    pred_Xn = mu #drift_term(mu,lhc_p,Delta) #mu
+    # Note, mu corresponds to X initially.
+    pred_Xn = np.append([1],mu) #drift_term(mu,lhc_p,Delta) #mu
     # Just set the covariance guess to the innovated one.
     P_state = np.array([mu[i] * (1 - mu[i]) for i in range(0,mu.shape[0]) ])
     # Initial Cov Prediction.Z0
@@ -627,16 +626,17 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T 
     # Just an attemt, not to keep.
     P0 = Sigma_prod.copy()
-    pred_Pn = P0[1:,1:] 
-    
+    #pred_Pn = P0[1:,1:] 
+    pred_Pn = P0
+
     # Run algo. 
     for n in range(0,n_obs):
         # Extended kalman filter.
         _, vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_cds(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
                                                             t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
         # Compute Zn too
-        Xn_extended = np.append([1],Xn[n,:])
-        Zn[n,:] =  cds_fun(lhc_q,Xn_extended,t_obs[n],t0[n],T_M_grid[:,n])
+        # Xn_extended = np.append([1],Xn[n,:])
+        Zn[n,:] =  cds_fun(lhc_q,Xn[n,:],t_obs[n],t0[n],T_M_grid[:,n])
 
         # add additional check until parameters are figured out
         # This is mainly an issue in local optimizers. 
@@ -663,20 +663,14 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
 
         if (n < n_obs - 1): # Not sensible to predict further.
             Delta = t_obs[n+1] - t_obs[n] # Only apprx for now. Move to loop maybe.
-            # Qt needs modification in according to being stat edependent.
-            P_state = np.array([Xn[n,i] * (1 - Xn[n,i]) for i in range(0,Xn.shape[1]) ])
-            Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T 
-            Q_k = Sigma_prod[1:,1:].copy() * Delta
             
-            # Then update the predictions:
-            # Taylor approximate the transition. 
             # Pure Euler
-            pred_Xn = drift_term(Xn[n,:],lhc_p,Delta) 
-            # Taylor
-            # pred_Xn = (drift_term(pred_Xn,lhc_p,Delta) + 
-            #            drift_deriv_term(pred_Xn,lhc_p,Delta) @ (Xn[n,:]-pred_Xn))
-            P_cov = drift_deriv_term(pred_Xn,lhc_p,Delta)
-            pred_Pn =  P_cov @ Pn[n,:,:] @ P_cov.T + Q_k
+            A_kalman = mat_exp_approx(A,Delta)
+            pred_Xn = A_kalman @ Xn[n,:]
+            # New Q_t is poly cov.
+            Q_k = compute_second_moment_numba(Xn[n,0],Xn[n,1:],G_n,p_idx_matrix,Delta) -np.outer(pred_Xn,pred_Xn)
+            
+            pred_Pn =  A_kalman @ Pn[n,:,:] @ A_kalman.T + Q_k
 
     return - log_likelihood, Xn, Zn, Pn 
 
@@ -690,7 +684,28 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
     lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
     lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
 
-    neg_loglik,_, _, _ = kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0)
+    ## Compute conditional moments...
+    # only secon moments
+    poly_deg = 2
+    N_n = math.comb(poly_deg+1+m,poly_deg)
+    basis,index = monomial_basis(1,np.ones(shape=m),poly_deg)
+    G_n = poly_G(m,lhc_p,params_p[2*m:-1],poly_deg,index)
+
+    # Get coordinate vectors. 
+    names = ['y'] + [f'X{i+1}' for i in range(m)]
+    p_idx_matrix = np.zeros((1+m, 1+m), dtype=np.int64)
+
+    for i in range(1+m):
+        for j in range(i, 1+m):
+            # map to monomial index (example: yX1 -> 5)
+            key = i == 0 and 'y' or f'X{i}'
+            key2 = j == 0 and 'y' or f'X{j}'
+            # ordering: smaller index first for consistency
+            key_str = key + key2 if i <= j else key2 + key
+            p_idx_matrix[i,j] = index[key_str]
+
+    # kalman filter
+    neg_loglik,_, _, _ = kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0,G_n,p_idx_matrix)
 
     return neg_loglik
 
@@ -1133,9 +1148,9 @@ class LHC_single():
             args=(t_obs, t0, T_M_grid, CDS_obs,
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
             strategy='best1bin',
-            popsize=5,         # larger popsize -> more exploration
-            maxiter=400,       # allow many generations          
-            tol=1e-5,            # looser tolerance
+            popsize=3,         # larger popsize -> more exploration
+            maxiter=100,       # allow many generations          
+            tol=1e-2,            # looser tolerance
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1185,8 +1200,29 @@ class LHC_single():
             lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
             lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
 
-            neg_log_lik, Xn, Zn, Pn = kalmanfilter_opt(optim_params, t_obs,t0,T_M_grid,CDS_obs,
-                                                       lhc_p,lhc_q,self.X0)
+            ## Compute conditional moments...
+            # only secon moments
+            poly_deg = 2
+            N_n = math.comb(poly_deg+1+m,poly_deg)
+            basis,index = monomial_basis(1,np.ones(shape=m),poly_deg)
+            G_n = poly_G(m,lhc_p,params_p[2*m:-1],poly_deg,index)
+
+            # Get coordinate vectors. 
+            names = ['y'] + [f'X{i+1}' for i in range(m)]
+            p_idx_matrix = np.zeros((1+m, 1+m), dtype=np.int64)
+
+            for i in range(1+m):
+                for j in range(i, 1+m):
+                    # map to monomial index (example: yX1 -> 5)
+                    key = i == 0 and 'y' or f'X{i}'
+                    key2 = j == 0 and 'y' or f'X{j}'
+                    # ordering: smaller index first for consistency
+                    key_str = key + key2 if i <= j else key2 + key
+                    p_idx_matrix[i,j] = index[key_str]
+
+            # kalman filter
+            neg_loglik, Xn, Zn, Pn = kalmanfilter_opt(optim_params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0,G_n,p_idx_matrix)
+
             # Build structures in very end to take onwards.
             self.build_P_params(optim_params,np.array([gamma1]))
             self.flatten_params()
@@ -1339,61 +1375,6 @@ class LHC_single():
         
         return T_return, path_Q
     
-    def simul_Z(self, Z0, T,M,n_mat,seed=None,scheme='Euler'):
-        delta = T / M
-        T_return = np.array([0] + [delta*k for k in range(1,M+1)])
-        path_Q = np.ones((M + 1, self.m+self.Y_dim))
-
-        # Set initial value. 
-        path_Q[0,:] = Z0
-        W_Q = norm.rvs(size = (M,self.m),random_state=seed) # simulate at beginning - faster!
-
-        # Get A matrix. Add argument if timul under P or Q.
-        params_Q = np.concatenate([self.kappa,self.theta,self.gamma1])
-        # If params have been sat with meaningfull values
-        params_P = np.concatenate([self.kappa_p,self.theta_p, self.sigma, self.sigma_err])
-        # If explicitly given, manual sigma is used.
-        params = np.concatenate([params_Q,params_P])
-        # Set also P params. 
-        lhc_p = self.build_P_params(params_P,self.gamma1)
-        _,cov_trans,_ = build_matrices(lhc_p,self.sigma,self.sigma_err,n_mat)
-
-        self.rebuild_dynamics()
-        # Get A
-        A = self.A
-        if scheme == 'Euler':
-            for i in range(1,M+1):
-                mu_t = (self.b.flatten() + 
-                        (self.beta + np.diag(-self.gamma@ path_Q[i - 1,:]) ) @  path_Q[i - 1,:]  )
-                # Create Sigma:
-                P_state = np.array(path_Q[i - 1,:] * (1 - path_Q[i-1,:]))
-                Sigma_prod = (cov_trans[1:,: ] @ np.diag(np.sqrt(P_state))) 
-                # Out
-                path_Q[i,:] = path_Q[i-1,:] + delta*mu_t +  np.sqrt(delta) * Sigma_prod @ W_Q[i-1,:]
-        
-        if scheme == 'Milstein':
-            for i in range(1,M+1):
-                mu_t = (self.b.flatten() + 
-                        (self.beta + np.diag(-self.gamma@ path_Q[i - 1,:]) ) @  path_Q[i - 1,:]  )
-                # Create Sigma:
-                P_state = np.array(path_Q[i - 1,:] * (1 - path_Q[i-1,:]))
-                Sigma_prod = (cov_trans[1:,: ]   @ np.diag(np.sqrt(P_state))) 
-                P_state_mil =  np.diag(np.array(1/(2*np.sqrt(path_Q[i - 1,:] * (1 - path_Q[i-1,:])))
-                                        * (1 - 2*path_Q[i-1,:])))
-
-                sigma_prime_t = cov_trans[1:,: ]  @ P_state_mil 
-
-                # sigma to mult on BM
-                sigma_with0 = np.vstack((np.zeros(self.m), Sigma_prod))
-                sigma_mil_with0 = np.vstack((np.zeros(self.m),sigma_prime_t @ Sigma_prod))
-
-                # Out
-                path_Q[i,:] = (path_Q[i-1,:] + delta*mu_t +  
-                                np.sqrt(delta) * sigma_with0 @ W_Q[i-1,:] + 
-                                1/2 * delta* sigma_mil_with0 @ (W_Q[i-1,:]**2-1))
-        
-        return T_return, path_Q
-
 
     # Simulate option prices in the model. 
     def get_cdso_pric_MC(self,t,t0,t_M,strikes,chi0,N,M,seed=1000, P_params=None):
@@ -1662,6 +1643,19 @@ def monomial_basis(y,X,poly_deg):
 
     return basis,term_index
 
+@njit
+def monomial_basis_numba(y,X,poly_deg):
+    m = X.shape[0]
+    if poly_deg == 1:
+        return np.append([1,y],X)
+    if poly_deg == 2:
+        exp_part= np.append([1,y],X)
+        second_basis = np.append(exp_part, [y**2])
+        second_basis = np.append(second_basis, y*X)
+        for i in range(0,m):
+            second_basis = np.append(second_basis,[X[i]*X[j] for j in range(i,m)] )
+
+    return second_basis
 
 # Then, we are ready for logic to compute this G_n thingy. 
 def poly_G(m,lhc,sigma,poly_deg,index):
@@ -1761,52 +1755,34 @@ def moments_poly(y,X,lhc,sigma,poly_deg,p_idxs,time_delta):
 
     return basis @ expm(G_n * time_delta) @ p_coord
 
-### this iterrative one is probably best to compute in numba...
 
-def h_poly(alpha,s,x):
-    '''
-    Computes polynomia h given enumeration.
-    '''
+@njit
+def compute_second_moment_numba(y,X, G_n, p_idx_matrix, time_delta):
+    basis = monomial_basis_numba(y,X,poly_deg = 2)
+    n_dim = p_idx_matrix.shape[0]
+    second_moment = np.zeros((n_dim, n_dim))
     
-    return s**alpha[0] * np.prod(alpha[1:]*x)
-
-def compute_enumerations(m,n):
-    '''
-    Compute the possible enummerations of degree n. 
-    '''
-    alphas = [alpha for alpha in product(range(n+1), repeat=m+1) if sum(alpha) <= n]
-    alphas = np.array(alphas).T 
-    return alphas
-
-
-#### Compute expected value and c_pi according to Lemma 4.4
-#@njit
-# TODO: look into this again. Should be conditional on deg.
-def c_pi(lhc,t0,t_M,k,alpha):
-    c_pi = 0
-    psi_cds_val = psi_cds(lhc,t0,t0,t_M,k)
-    for i in range(psi_cds_val.shape[0]):
-        indicator = alpha[i]-1 >= 0
-        e_i = np.zeros(psi_cds_val.shape[0])
-        e_i[i] = 1
-        c_pi += indicator * c_pi * psi_cds_val[i]
-
-    return c_pi
-
-# can work for n=1
-def moments_Z(lhc,alphas,sigma,t0,t_M,k,y,X,n=1):
-    # Find cols of alphas that should be summed.
-    idx_sum = np.where(np.sum(alphas,axis=0)==n)[0]
-    alphas_comp = alphas[:,idx_sum]
-    # get the index vector
-    _, basis_idx = monomial_basis(y,X,poly_deg=n)
-    inv_basis =  {v: k for k, v in basis_idx.items()}
-    for idx in range(alphas_comp.shape[1]): 
-        c_pi_val = c_pi(lhc,t0,t_M,k,alphas_comp[idx])
-        poly = h_poly(alphas_comp[idx],y,X)
-        
-        p_idx = np.argmax(alphas_comp[idx])+1
-        term = moments_poly(y,X,lhc,sigma,poly_deg = n,p_idxs=p_idx,time_delta=t_M-t0)
-        moment = c_pi_val * term
+    # Compute expm once (Numba-compatible)
+    G_exp = mat_exp_approx(G_n, time_delta)
     
-    return moment
+    # Fill upper triangle
+    for i in range(n_dim):
+        for j in range(i, n_dim):
+            p_idx = p_idx_matrix[i, j]
+            p_vec = np.zeros(G_n.shape[0])
+            p_vec[p_idx] = 1.0
+            second_moment[i, j] = basis @ G_exp @ p_vec
+    
+    # Symmetrize
+    for i in range(n_dim):
+        for j in range(i):
+            second_moment[i, j] = second_moment[j, i]
+    
+    return second_moment
+
+
+# if __name__ == '__main__':
+#     test = monomial_basis_numba(y=0.9,X=np.array([0.5,0.25,0.1]),poly_deg=2)
+#     test2,index = monomial_basis(y=0.9,X=np.array([0.5,0.25,0.1]),poly_deg=2)
+
+#     stopper = 1

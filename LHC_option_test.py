@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import os
 
 # Initialise with values from the article.
-lhc = LHC_single(r=0.0, delta=0.4,cds_tenor=0.25)
+lhc = LHC_single(r=0.0, delta=0.4,cds_tenor=1)
 Y_dim,m = 1,1
 X0 = 0.2
 chi0 = np.array([1] + [X0]*m)
@@ -15,10 +15,10 @@ lhc.flatten_params()
 ell1,ell2 = 0.05,1
 gamma1 = 0.25
 beta = - (ell1+ell2)
-b = ell1 * ell2 / gamma1
+b =  ell1 * ell2 / gamma1
 # Translate to kappa, theta also. Then beta=-kappa so kappa=(ell1+ell2). Theta is same ass b. normalizes by kappa
-kappa = -beta
-theta = b/kappa
+kappa = -beta 
+theta = b / kappa
 lhc.flatten_params()
 
 lhc.unflatten_params(np.array([kappa,theta,gamma1]))
@@ -36,7 +36,7 @@ save_path = f"./Exploratory/"   # <--- change to your path
 M = 1000 # (how continous we make the plot)
 for k in strike_spreads:
     fig, ax = plt.subplots(figsize=(10,6))
-    # Get lower bounds on z.
+    # Get lower bounds on z - one for each strike.
     b_min,b_max = lhc.get_bBounds(t_start,T_option,k)
     # Create some grid fr plotting,
     plot_grid = np.array([b_min + i*(b_max-b_min)/M for i in range(0,M+1)])

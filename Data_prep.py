@@ -67,4 +67,12 @@ for ticker in tickers:
 test_df = data_mod[(data_mod['Ticker'] == 'DANBNK') ]
 
 test_df.to_excel("./Data/test_data.xlsx", index=False) 
+
+## subset more data
+# lis tto keep
+firms = ['BBVSM', 'BNP','CMZB','DANBNK','DB', 'HSBC', 'USPA']
+sub_df = data_mod[(data_mod['Ticker'].isin(firms)) ]
+
+sub_df.to_excel("./Data/subset_data.xlsx", index=False) 
+
 # Reshape and make into array. 

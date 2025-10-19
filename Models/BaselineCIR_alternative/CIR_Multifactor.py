@@ -422,10 +422,10 @@ class CIRIntensity():
             constraints=(nonlinear_constraint,),
             # args=(t_obs[::3], t_mat_grid[:, ::3], Y[::3, :]),
             args=(t_obs, t_mat_grid, Y),
-
-            maxiter=100,          
-            popsize=5,           # smaller population
-            tol=1e-4,            # looser tolerance
+            strategy='best1bin',
+            popsize=5,         # larger popsize -> more exploration
+            maxiter=400,       # allow many generations          
+            tol=1e-5,            # looser tolerance
             workers=1,
             updating='immediate',
             polish=False
@@ -482,7 +482,6 @@ class CIRIntensity():
             
     # Simulation will likely also be th eway to go about expression in Filipovic (tedious)
     def simulate_intensity(self, lambda0,T,M,scheme,seed=1000):
-        # TODO: Make possible to simulate in several dim
         theta = self.theta
         kappa = self.kappa
         # Do baseline calculations

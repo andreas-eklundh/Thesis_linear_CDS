@@ -82,7 +82,7 @@ default_intensity = lhc.default_intensity(X,Y)
 
 # ---- Model CDS ----
 CDS_model = lhc.CDS_model(t, t_mat_grid, CDS_obs)
-np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/LHC_results.npz",
+np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/DANBNK/LHC_results.npz",
          final_param=out_params,
          Xn=X,
          Yn=Y,
