@@ -88,7 +88,7 @@ if __name__ == '__main__':
     Yn=data["Yn"]
     Zn = data["CDS_model"]
     default_intensity = data["Default_intensity"]
-    mpr = data["MPR"]
+    # mpr = data["MPR"]
 
 
     mpr,girsanov = lhc.get_MPR(optim_params,Yn,Xn.T,CDS_obs)
@@ -115,16 +115,16 @@ if __name__ == '__main__':
 
     # MPR
 
-    fig, ax = plt.subplots(figsize=(10,6))
-    ax.plot(t, mpr, "-", alpha=0.7, label=f"MPR")
+    # fig, ax = plt.subplots(figsize=(10,6))
+    # ax.plot(t, mpr, "-", alpha=0.7, label=f"MPR")
 
-    ax.set_xlabel("Time (years)")
-    ax.set_ylabel("Market Price of Risk")
-    ax.set_title("Market price of risk")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(os.path.join(save_path, "MPR_LHC.png"), dpi=150)
-    plt.close(fig)
+    # ax.set_xlabel("Time (years)")
+    # ax.set_ylabel("Market Price of Risk")
+    # ax.set_title("Market price of risk")
+    # ax.legend()
+    # fig.tight_layout()
+    # fig.savefig(os.path.join(save_path, "MPR_LHC.png"), dpi=150)
+    # plt.close(fig)
 
 
     # Default intensity: 

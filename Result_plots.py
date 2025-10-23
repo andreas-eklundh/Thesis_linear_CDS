@@ -10,7 +10,7 @@ from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity
 import matplotlib.pyplot as plt
 import os
 
-#### Get a table printed with the estimated values. 
+#### Get a table printed with the estimated values.
 # some plotting functionality.
 def print_model_params(name, final_param, m):
     """
@@ -26,7 +26,7 @@ def print_model_params(name, final_param, m):
         theta = final_param[idx:idx + m]; idx += m
         gamma1 = final_param[idx]; idx += 1
         kappa_p = final_param[idx:idx + m]; idx += m
-        theta_p = final_param[idx:idx + m]; idx += m
+        # theta_p = final_param[idx:idx + m]; idx += m
         sigma = final_param[idx:idx + m]; idx += m
         sigma_err = final_param[idx] if idx < len(final_param) else np.nan
 
@@ -34,7 +34,7 @@ def print_model_params(name, final_param, m):
         print("θ      =", np.round(theta, 4))
         print("γ₁     =", np.round(gamma1, 4))
         print("κ_pʹ     =", np.round(kappa_p, 4))
-        print("θ_pʹ     =", np.round(theta_p, 4))
+        # print("θ_pʹ     =", np.round(theta_p, 4))
         print("σ      =", np.round(sigma, 4))
         print("σ_err  =", np.round(sigma_err, 6))
         print()
@@ -56,27 +56,26 @@ def print_model_params(name, final_param, m):
         theta = final_param[idx:idx + m]; idx += m
         sigma = final_param[idx:idx + m]; idx += m
         kappa_p = final_param[idx:idx + m]; idx += m
-        theta_p = final_param[idx:idx + m]; idx += m
+        # theta_p = final_param[idx:idx + m]; idx += m
         sigma_err = final_param[idx] if idx < len(final_param) else np.nan
 
         print("κ      =", np.round(kappa, 4))
         print("θ      =", np.round(theta, 4))
         print("σ      =", np.round(sigma, 4))
         print("κ_pʹ     =", np.round(kappa_p, 4))
-        print("θ_pʹ     =", np.round(theta_p, 4))
+        # print("θ_pʹ     =", np.round(theta_p, 4))
         print("σ_err  =", np.round(sigma_err, 6))
         print()
 
 if __name__ == "__main__":
-    # Get parameters and corresponding states. 
+    # Get parameters and corresponding states.
     test_df = pd.read_excel("./Data/test_data.xlsx")
 
     # Pivot
     test_df = test_df.pivot(index = ['Date','Ticker'],
                             columns='Tenor',values = 'Par Spread').reset_index()
     # Test on subset data ownly to get very few obs. One large spread increase to test.
-    #test_df = test_df[(test_df['Date']<'2021-01-01') & (test_df['Date']>='2019-06-01')]
-    # test_df = test_df[5::5]
+
 
     # Function to convert tenors to months to same metric (so
     test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
@@ -104,7 +103,7 @@ if __name__ == "__main__":
     Default_intensityLHC = data["Default_intensity"]
 
 
-    data = np.load("./Results/DANBNK/kalman_resultsLHC.npz")
+    data = np.load("./Results/DANBNK/kalman_resultsLHC_NX2.npz")
     final_paramLHCK = data["final_param"]
     XnLHCK = data["Xn"]
     YnLHCK=data["Yn"]
@@ -120,14 +119,14 @@ if __name__ == "__main__":
 
 
 
-    # # Do the plotting. 
+    # # Do the plotting.
     save_path = f"./Results/DANBNK/"   # <--- change to your path
 
 
     # Loop through maturities and make a separate plot for each
     for i in range(XnCIR.shape[1]):
         fig, ax = plt.subplots(figsize=(10, 6))
-        
+
         ax.plot(t, XnLHCK[:,i], "-", alpha=0.7, color='orange', label="LHC Kalman")
         ax.plot(t, XnLHC[i,:], "-", alpha=0.7, color='blue', label="LHC")
         ax.plot(t, XnCIR[:,i], "-", alpha=0.7, color='green', label="CIR Kalman")
@@ -170,7 +169,7 @@ if __name__ == "__main__":
     # Loop through maturities and make a separate plot for each
     for m,mat in enumerate(maturities):
         fig, ax = plt.subplots(figsize=(10, 6))
-        
+
         ax.plot(t, ZnLHCK[:,m], "-", alpha=0.7, color='orange', label="LHC Kalman")
         ax.plot(t, ZnLHC[:,m], "-", alpha=0.7, color='blue', label="LHC")
         ax.plot(t, CDS_CIR[:,m], "-", alpha=0.7, color='green', label="CIR Kalman")
@@ -206,17 +205,17 @@ if __name__ == "__main__":
 
 
 
-    ### Compute Global measures of fit. 
+    ### Compute Global measures of fit.
     # Stack together CDS frames
 
-    models = [ZnLHC,ZnLHCK,CDS_CIR] # stacked fitted CDS spreads. 
+    models = [ZnLHC,ZnLHCK,CDS_CIR] # stacked fitted CDS spreads.
 
     gfm = global_fit_measures(CDS_obs, models)
 
-    rmse_series, rmse = gfm.rmse() 
-    ape_series, ape = gfm.ape() 
-    aae_series, aae = gfm.aae() 
-    arpe_series, arpe = gfm.arpe() 
+    rmse_series, rmse = gfm.rmse()
+    ape_series, ape = gfm.ape()
+    aae_series, aae = gfm.aae()
+    arpe_series, arpe = gfm.arpe()
 
     # Example structure:
     cols_names = ["LHC", "LHC Kalman", "CIR"]
@@ -287,21 +286,21 @@ if __name__ == "__main__":
     lhc.flatten_params()
     # Set with optimal parameters
     lhc.unflatten_params(final_paramLHCK[:2*X_dim+1])
-    # Set also P params. 
+    # Set also P params.
     gamma1 = np.array([final_paramLHCK[2*X_dim]])
-    lhc_P = lhc.build_P_params(params=final_paramLHCK[2*X_dim+1:],gamma1=gamma1)
-
+    theta=final_paramLHCK[X_dim:2*X_dim]
+    lhc_P = lhc.build_P_params(params=final_paramLHCK[2*X_dim+1:],theta=theta,gamma1=gamma1)
     # Then, we are ready to price in every dimension.
     # Strike grid. Base around forward spread
     # We consider this setup
     t_now= 0.0
     t0 = 1.0 # Maturity of CDSoption.
     t_mat = t0 + 5.0 # So CDS with 5 yr mat.
-    cds0_lhc = lhc.CDS_model(t_obs = np.array([t_now]),T_M_grid=np.array([[t_mat]]),
+    cds0_lhc = lhc.CDS_model(t_obs = np.array([t_now]),T_M_grid=np.array([[t_mat-t0]]),
                         CDS_obs=None,t0=np.array([t_now]),X_in = XnLHCK[-1,:].reshape((X_dim,1)),
                         Y_in = np.array([YnLHCK[-1]]).reshape((1,1)))
 
-    ## The inital value at en of data is just observed CDS spread. 
+    ## The inital value at en of data is just observed CDS spread.
     cds0 = CDS_obs[-1,2]
 
     # Then strikes around the above. Say PM 150 Bps.
@@ -310,28 +309,33 @@ if __name__ == "__main__":
     # Set Simulate option sizes.
     chi0 = np.concatenate((np.array([YnLHCK[-1]]), XnLHCK[-1,:]))
     # Set discretization and number of simul
-    # N, M = 4,500 
-    N, M = 1000,2000
+    N, M = 200,1000
+    # N, M = 1000,3000
 
-    # barriers_percentage = np.array([(1+i*0.025) for i in range(1,20+1)])
-    # barriers = cds0*barriers_percentage
-    # T_mat_barrier = t0 + (t_mat-t0)/2 # Matures halfway trough the CDS 
-    # look_MC_hist,look_MC,look_cds_min =  lhc.get_lookback_price_MC(t_now,t0,t_mat,T_mat_barrier,
-    #                                                               chi0,N,M,seed=1000)
-
-    cdso_MC_hist,cdso_MC = lhc.get_cdso_pric_MC(t_now,t0,t_mat,strikes,chi0,N,M,seed=1000)
+    ### Get CDSO using theoretical values.
+    # Note, we need to discound too, see top vof p. 19
+    # To check if actually worth running many. 
+    # cdso_actual = lhc.get_cdso_price(t_now,t0,t_mat,chi0[0],chi0[1:],np.array([0.005]),n_max=9)
+    # cdso_MC_hist,cdso_MC = lhc.get_cdso_price_MC(t_now,t0,t_mat,np.array([0.005]),chi0,N,M,seed=1000) 
+    # print(f'Test: Actual CDSO price {cdso_actual}')
+    # print(f'Test: MC CDSO price {cdso_MC}')
+    # Must assume it to be correct. 
+    leg_deg = 9
+    cdso_actual = lhc.get_cdso_price(t_now,t0,t_mat,chi0[0],chi0[1:],strikes,n_max=leg_deg)
+    cdso_MC_hist,cdso_MC = lhc.get_cdso_price_MC(t_now,t0,t_mat,strikes,chi0,N,M,seed=1000)
+    # N, M = 100,500
 
     ######### DIGITAL OPTION PRICING. ##############
     # Define Barriers as some percentage of the CDS at current timepoint.
     barriers_percentage = np.array([(1+i*0.025) for i in range(1,20+1)])
     barriers = cds0*barriers_percentage
-    T_mat_barrier = t0 + (t_mat-t0)/2 # Matures halfway trough the CDS 
+    T_mat_barrier = t0 + (t_mat-t0)/2 # Matures halfway trough the CDS
     digital_MC_hist,digital_MC = lhc.get_digital_barrier_price_MC(t_now,t0,t_mat,T_mat_barrier,barriers,
                                                                 chi0,N,M,seed=1000)
 
 
     ######### Lookback OPTION PRICING. ##############
-    # Consider CDS at expiry. 
+    # Consider CDS at expiry.
     look_MC_hist,look_MC,look_cds_min =  lhc.get_lookback_price_MC(t_now,t0,t_mat,T_mat_barrier,
                                                                 chi0,N,M,seed=1000)
 
@@ -354,12 +358,12 @@ if __name__ == "__main__":
     # Strike grid. Base around forward spread
     # We consider this setup
 
-    cds0_CIR = cir.calc_CDS(final_paramCIR,t_now,t_mat,X_cir_now,t0=t_now)
+    cds0_CIR = cir.calc_CDS(final_paramCIR,t_now,t_mat-t0,X_cir_now,t0=t_now)
 
     print(f"CIR Spread {cds0_CIR}, LHC spread {cds0_lhc}, Observed {cds0}")
 
     # Numba approximation check.
-    cds0_CIR_n = calc_cds(final_paramCIR,t_now,t_mat,X_cir_now,
+    cds0_CIR_n = calc_cds(final_paramCIR,t_now,t_mat-t0,X_cir_now,
                         t_now,cir.r,cir.delta,cir.tenor,cir.X_dim)
     print(f'CIR Spread {cds0_CIR}, CIR Spread Numba {cds0_CIR_n}')
 
@@ -374,7 +378,7 @@ if __name__ == "__main__":
 
 
     ######### Lookback OPTION PRICING. ##############
-    # Consider CDS at expiry. 
+    # Consider CDS at expiry.
     look_MC_hist_cir,look_MC_cir,look_cds_min_cir =  cir.get_lookback_price_MC(final_paramCIR,t_now,t0,t_mat,T_mat_barrier,
                                                                 XnCIR[-1,:],N,M,seed=1000)
 
@@ -383,9 +387,9 @@ if __name__ == "__main__":
 
 
     #### Note, in this instance, we actually can compute option prices given estimates states
-    ### This approach relies on G-transform. 
+    ### This approach relies on G-transform.
     ### Note, we can compute forwards spreads, and based on those price. But not the same as above per se.
-    # Not really possible unless some change of measure. 
+    # Not really possible unless some change of measure.
 
     # cdso_fourier = np.zeros(strikes.shape[0])
 
@@ -425,6 +429,7 @@ if __name__ == "__main__":
     fig1, ax1 = plt.subplots(figsize=(8, 6))
 
     ax1.plot(strike_offsets_bps, cdso_MC_bps, 'o-', color='navy', alpha=0.8,label='LHC Model, Simulated')
+    ax1.plot(strike_offsets_bps, cdso_actual*10000, 'o-', color='red', alpha=0.8,label=f'LHC Model, Legendre n={leg_deg}')
     ax1.plot(strike_offsets_bps, cdso_MC_bps_cir, 'o-', color='forestgreen', alpha=0.8,label='CIR Model, Simulated')
     # ax1.plot(strike_offsets_bps, cdso_MC_bps_cir_fourier, 'o-', color='grey', alpha=0.8,label='CIR Model, Fourier')
 

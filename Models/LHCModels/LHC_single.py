@@ -6,6 +6,9 @@ from scipy.integrate import solve_ivp
 from scipy.linalg import expm 
 from itertools import combinations_with_replacement, product
 import re
+from numpy.polynomial.legendre import legval,Legendre
+from Models.moments import MultivariatePolynomialGenerator as mpg
+import sympy as sp
 
 from scipy.optimize import lsq_linear 
 from numba import njit, float64, int64 
@@ -297,7 +300,7 @@ def cds_deriv(lhc, chi, t,t0, t_mat_grid):
         prem = psi_prem(lhc,t,t0,t_mat_grid[i])
         prot = psi_prot(lhc,t,t0,t_mat_grid[i])
         term1 = prot[1:] / np.dot(prem, chi)
-        term2 = np.dot(prot, chi) / np.dot(prem, chi)**2 *prem[1:] 
+        term2 = np.dot(prot, chi) / np.dot(prem, chi)**2 * prem[1:] 
         result[i,:] = term1 - term2
         
     return result
@@ -404,7 +407,6 @@ def build_matrices(lhc,sigma_i,sigma_err,n_mat):
 
 
 ### Actual kalman filters.
-
 @njit
 def drift_term(Xn,lhc_p,Delta):
     (a, c, gamma, b, beta,
@@ -431,7 +433,8 @@ def drift_deriv_term(Xn, lhc_p, Delta):
     s = g @ x                    # scalar g^T x
     outer_xg = np.outer(x, g)    # x g^T
 
-    J = np.eye(n) + Delta * (B - (s * np.eye(n) + outer_xg))
+    # Plus here as we are finding derivative wrt. Z and not Y.
+    J = np.eye(n) + Delta * (B + (s * np.eye(n) + outer_xg))
     return J
 
 
@@ -602,10 +605,10 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
 
     # Just to set Xn,Pn, but not needed to be thse vals.
     # Don't know these values. Just arbitrary guessing. on X. Remainder calc.
-    Y0 = np.array([1])
+    # Y0 = np.array([1])
     X0 = np.ones(shape=(m,)) * X0
-    Z0 = np.ones(Y0.size+X0.size, dtype=np.float64)
-    Z0[Y0.size:] = X0.ravel()/ Y0
+    # Z0 = np.ones(Y0.size+X0.size, dtype=np.float64)
+    # Z0[Y0.size:] = X0.ravel()/ Y0
 
     # Store predictions. 
     pred_Xn = np.zeros(L)
@@ -618,7 +621,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     mu1 = solve_mu1(kappa_p, theta_p, gamma1)
     mu = compute_stationary(kappa_p,theta_p,m,gamma1,mu1= mu1)
     # Bound mu
-    # mu = np.clip(mu,0,1)
+    mu = np.clip(mu,0,1)
     pred_Xn = mu #drift_term(mu,lhc_p,Delta) #mu
     # Just set the covariance guess to the innovated one.
     P_state = np.array([mu[i] * (1 - mu[i]) for i in range(0,mu.shape[0]) ])
@@ -635,6 +638,8 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
         _, vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_cds(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
                                                             t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
         # Compute Zn too
+        # Clip Xn
+        Xn[n,:] = np.clip(Xn[n,:],0,1)
         Xn_extended = np.append([1],Xn[n,:])
         Zn[n,:] =  cds_fun(lhc_q,Xn_extended,t_obs[n],t0[n],T_M_grid[:,n])
 
@@ -680,8 +685,9 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
 
     return - log_likelihood, Xn, Zn, Pn 
 
-# @njit
+@njit
 def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor):
+    print(params)
     # For numerical stability.
     params_p = params[2*m+1:]
     params_q = params[:2*m+1]
@@ -694,6 +700,7 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
 
     return neg_loglik
 
+# @njit
 def nonlinear_constraints( params, m):
     """
     Vector-valued constraint function for NonlinearConstraint.
@@ -710,7 +717,6 @@ def nonlinear_constraints( params, m):
     kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
     # ensure arrays
     kappa_p = np.asarray(kappa_p, dtype=float)
-    theta_p = np.asarray(theta_p, dtype=float)
     sigma = np.asarray(sigma, dtype=float)
 
     # Build constraints: all should be >= 0
@@ -1053,7 +1059,7 @@ class LHC_single():
             ### New stuff: All the ones needed here e.g. sigma, sigma_Err
             sigma_i = rng.uniform(0.1, 0.7, size=(X_dim,))       # Kappa given 
             # Sigma error is likely smalll.
-            sigma_err = rng.uniform(0.001, 0.01, size=(Y_dim,))       # Kappa given 
+            sigma_err = rng.uniform(0.0001, 0.005, size=(Y_dim,))       # Kappa given 
 
             r = self.r
             Y_dim = self.Y_dim
@@ -1124,7 +1130,7 @@ class LHC_single():
 
         # Global optimizer: few iters. Do on supsed only. 
         result = differential_evolution(
-            func=kalman_wrapper,
+            func= kalman_wrapper,
             x0=x0,
             bounds=bounds,
             constraints=(nlc,),
@@ -1133,9 +1139,11 @@ class LHC_single():
             args=(t_obs, t0, T_M_grid, CDS_obs,
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
             strategy='best1bin',
-            popsize=5,         # larger popsize -> more exploration
-            maxiter=400,       # allow many generations          
-            tol=1e-5,            # looser tolerance
+            tol=1e-7,                             # fine convergence
+            popsize=max(10, 2 * len(bounds)),      # scale with number of parameters
+            mutation=(0.5, 0.9),                  # larger for exploration
+            recombination=0.8,                     # moderate
+            maxiter=2000,
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1310,11 +1318,11 @@ class LHC_single():
         A = self.A
         if scheme == 'Euler':
             for i in range(1,M+1):
+                # Out
                 mu_t = A @ path_Q[i - 1,:]
                 # Create Sigma:
                 P_state = np.array(path_Q[i - 1,1:] * (path_Q[i-1,0] - path_Q[i-1,1:]))
                 Sigma_prod = (cov_trans @ np.diag(np.sqrt(P_state))) 
-                # Out
                 path_Q[i,:] = path_Q[i-1,:] + delta*mu_t +  np.sqrt(delta) * Sigma_prod @ W_Q[i-1,:]
         
         if scheme == 'Milstein':
@@ -1322,81 +1330,26 @@ class LHC_single():
                 mu_t = A @ path_Q[i - 1,:]
                 # Create Sigma:
                 P_state = np.array(path_Q[i - 1,1:] * (path_Q[i-1,0] - path_Q[i-1,1:]))
-                Sigma_prod = (cov_trans[1:,: ]   @ np.diag(np.sqrt(P_state))) 
+                Sigma_prod = (cov_trans   @ np.diag(np.sqrt(P_state))) 
                 P_state_mil =  np.diag(np.array(1/(2*np.sqrt(path_Q[i - 1,1:] * (path_Q[i-1,0] - path_Q[i-1,1:])))
                                        * (path_Q[i-1,0] - 2*path_Q[i-1,1:])))
 
                 sigma_prime_t = cov_trans[1:,: ]  @ P_state_mil 
 
                 # sigma to mult on BM
-                sigma_with0 = np.vstack((np.zeros(self.m), Sigma_prod))
-                sigma_mil_with0 = np.vstack((np.zeros(self.m),sigma_prime_t @ Sigma_prod))
+                sigma_mil_with0 = np.zeros((self.m+1,self.m+1))
+                sigma_mil_with0[1:,1:] = sigma_prime_t
 
                 # Out
                 path_Q[i,:] = (path_Q[i-1,:] + delta*mu_t +  
-                               np.sqrt(delta) * sigma_with0 @ W_Q[i-1,:] + 
-                               1/2 * delta* sigma_mil_with0 @ (W_Q[i-1,:]**2-1))
+                               np.sqrt(delta) * Sigma_prod @ W_Q[i-1,:] + 
+                               1/2 * delta* sigma_mil_with0 @ Sigma_prod @ (W_Q[i-1,:]**2-1))
         
         return T_return, path_Q
     
-    def simul_Z(self, Z0, T,M,n_mat,seed=None,scheme='Euler'):
-        delta = T / M
-        T_return = np.array([0] + [delta*k for k in range(1,M+1)])
-        path_Q = np.ones((M + 1, self.m+self.Y_dim))
-
-        # Set initial value. 
-        path_Q[0,:] = Z0
-        W_Q = norm.rvs(size = (M,self.m),random_state=seed) # simulate at beginning - faster!
-
-        # Get A matrix. Add argument if timul under P or Q.
-        params_Q = np.concatenate([self.kappa,self.theta,self.gamma1])
-        # If params have been sat with meaningfull values
-        params_P = np.concatenate([self.kappa_p,self.theta_p, self.sigma, self.sigma_err])
-        # If explicitly given, manual sigma is used.
-        params = np.concatenate([params_Q,params_P])
-        # Set also P params. 
-        lhc_p = self.build_P_params(params_P,self.gamma1)
-        _,cov_trans,_ = build_matrices(lhc_p,self.sigma,self.sigma_err,n_mat)
-
-        self.rebuild_dynamics()
-        # Get A
-        A = self.A
-        if scheme == 'Euler':
-            for i in range(1,M+1):
-                mu_t = (self.b.flatten() + 
-                        (self.beta + np.diag(-self.gamma@ path_Q[i - 1,:]) ) @  path_Q[i - 1,:]  )
-                # Create Sigma:
-                P_state = np.array(path_Q[i - 1,:] * (1 - path_Q[i-1,:]))
-                Sigma_prod = (cov_trans[1:,: ] @ np.diag(np.sqrt(P_state))) 
-                # Out
-                path_Q[i,:] = path_Q[i-1,:] + delta*mu_t +  np.sqrt(delta) * Sigma_prod @ W_Q[i-1,:]
-        
-        if scheme == 'Milstein':
-            for i in range(1,M+1):
-                mu_t = (self.b.flatten() + 
-                        (self.beta + np.diag(-self.gamma@ path_Q[i - 1,:]) ) @  path_Q[i - 1,:]  )
-                # Create Sigma:
-                P_state = np.array(path_Q[i - 1,:] * (1 - path_Q[i-1,:]))
-                Sigma_prod = (cov_trans[1:,: ]   @ np.diag(np.sqrt(P_state))) 
-                P_state_mil =  np.diag(np.array(1/(2*np.sqrt(path_Q[i - 1,:] * (1 - path_Q[i-1,:])))
-                                        * (1 - 2*path_Q[i-1,:])))
-
-                sigma_prime_t = cov_trans[1:,: ]  @ P_state_mil 
-
-                # sigma to mult on BM
-                sigma_with0 = np.vstack((np.zeros(self.m), Sigma_prod))
-                sigma_mil_with0 = np.vstack((np.zeros(self.m),sigma_prime_t @ Sigma_prod))
-
-                # Out
-                path_Q[i,:] = (path_Q[i-1,:] + delta*mu_t +  
-                                np.sqrt(delta) * sigma_with0 @ W_Q[i-1,:] + 
-                                1/2 * delta* sigma_mil_with0 @ (W_Q[i-1,:]**2-1))
-        
-        return T_return, path_Q
-
 
     # Simulate option prices in the model. 
-    def get_cdso_pric_MC(self,t,t0,t_M,strikes,chi0,N,M,seed=1000, P_params=None):
+    def get_cdso_price_MC(self,t,t0,t_M,strikes,chi0,N,M,seed=1000, P_params=None):
         # If p params specific (Sigma specific), se can calculate for differnt sigma
         if P_params is not None:
             lhc_p = self.build_P_params(P_params,self.gamma1)
@@ -1411,24 +1364,24 @@ class LHC_single():
         prices_MC_hist = np.zeros(shape = (N,N_strikes))
         for i in range(N):
             # Get Latent states. Simulate to time of inception of CDS. Calculate only for 1 maturity.
-            T_return, X_Q = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed)
+            T_return, X_Q = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed,scheme='Milstein')
             S = X_Q[:,0]
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
-            U = uniform.rvs(random_state=seed)
-            # If survival falls below U at any points, default happened prior to t0
-            if np.any(S <= U):
-                prices[i] = 0
+            # U = uniform.rvs(random_state=seed)
+            # # If survival falls below U at any points, default happened prior to t0
+            # if np.any(S <= U):
+            #     prices[i] = 0
             # Else - begin to compute prices as no default
-            else: 
-                latent_end = X_Q[-1,:]
-                # Value is assumed to be exactly at inception date first date of contract
-                # Loop over strikes here, to save simul time later on (also same randomness)
-                for j in range(N_strikes):
-                    # Find value of option using the strike. This is the payoff. 
-                    Value_CDS = psi_cds(lhc,t0, t0, t_M, strikes[j]) @ latent_end
-                    # Discount back. Also, divide by a^TY_t. If t=0, then not matter.
-                    # Note still an option, so only enter if positive. 
-                    prices[i,j] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0) / S[0]
+            # else: 
+            latent_end = X_Q[-1,:]
+            # Value is assumed to be exactly at inception date first date of contract
+            # Loop over strikes here, to save simul time later on (also same randomness)
+            for j in range(N_strikes):
+                # Find value of option using the strike. This is the payoff. 
+                Value_CDS = psi_cds(lhc,t0, t0, t_M, strikes[j]) @ latent_end
+                # Discount back. Also, divide by a^TY_t. If t=0, then not matter.
+                # Note still an option, so only enter if positive. 
+                prices[i,j] = np.exp(-self.r * (t0 - t)) * np.maximum(Value_CDS,0) / S[0]
             # Achieve a running mean also for convergence assessment.
             prices_MC_hist[i, :] = np.mean(prices[:i+1, :], axis=0)
             seed += 1
@@ -1458,7 +1411,7 @@ class LHC_single():
                             self.Y_dim, self.delta, self.tenor)
         for i in range(N):
             # Get Latent states. Simulate path of CDS till mat.
-            T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed)
+            T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed,scheme='Milstein')
             Xn = X_Q[:,self.Y_dim:]
             Yn = X_Q[:,0]
             # Retrieve price path...
@@ -1521,7 +1474,7 @@ class LHC_single():
         prices = np.zeros(shape = N)
         for i in range(N):
             # Get Latent states. Simulate path of CDS till mat.
-            T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed)
+            T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed,scheme='Milstein')
             # Retrieve price path...
             T_M_grid = ((T_return + t_M)).reshape((1,T_return.shape[0]))
             CDS_sim = get_CDS_Model(T_return, T_return+t0, T_M_grid, X_Q.T, lhc )
@@ -1565,11 +1518,11 @@ class LHC_single():
 
     def f_n(self,n,t,t0,b_min,b_max,Y):
         Lint, _ = quad(
-            lambda x: (x * GenLegendrePoly(x,n,b_min,b_max)),
+            lambda x: (x * self.gen_legendre_poly(x,n,b_min,b_max)),
             0, b_max,
-            limit=200,
-            epsabs=1e-12,
-            epsrel=1e-12
+            limit=100,
+            epsabs=1e-6,
+            epsrel=1e-6
         )
         return np.exp(-self.r * (t0-t)) * Lint/ Y
     
@@ -1585,228 +1538,299 @@ class LHC_single():
         # Loop from 0 to n+1 (n)
         for j in range(n+1):
             f_j = self.f_n(j,t,t0,b_min,b_max,Y)
-            GLPoly = GenLegendrePoly(z,j,b_min,b_max)
+            GLPoly = self.gen_legendre_poly(z,j,b_min,b_max)
             pi += f_j * GLPoly
         
         return pi
     
 
+#### Get coefficients to write (44) as a polynomium ni Z.
+# Get coefficients of P_n in monomial basis
+    def get_legendre_coeffs(self,n_max):
+        # Determine maximum monomial length
+        a_max = n_max + 1  # max degree + 1 for coefficients
+        a = np.zeros((n_max + 1, a_max))
 
+        for n in range(n_max + 1):
+            P = Legendre.basis(n)
+            coef = P.convert(kind=np.polynomial.Polynomial).coef
+            a[n, :coef.shape[0]] = coef  # fill only existing coefficients
 
-## Pricing numba functions:
-@njit
-def LegendrePoly(x, n):
-    # Compute standard Legendre. 
-    Le0, Le1 = 1,x
-    if n == 0:
-        return Le0
-    if n == 1:
-        return Le1
-    else:
-        n_current = 1
-        Le_np1 = 0 # Just start value.
-        Le_n = Le1
-        Le_nm1 = Le0
-        while n_current < n:
-            Le_np1 = ((2*n_current + 1) * x * Le_n / (n_current + 1) -
-                       n_current * Le_nm1 / (n_current+1))
-            # Bump values. 
-            Le_nm1 = Le_n
-            Le_n = Le_np1
-
-            # Bump current. 
-            n_current += 1
-
-        return Le_np1
-
-
-@njit
-def GenLegendrePoly(x, n,b_min,b_max):
-    mu = (b_max + b_min) / 2
-    sigma = (b_max - b_min) / 2
-
-    mathL = np.sqrt((1+2*n)/(2*sigma**2)) * LegendrePoly((x - mu) / sigma,n)
-
-    return mathL
-
-
-##### Functionality for expectations. Likely numba for efficiency. 
-    ### Compute conditional moments of Y and X. 
-def monomial_basis(y,X,poly_deg):
-    m = X.shape[0]
-    N_n = math.comb(poly_deg+1+m,poly_deg)
-    stacked = np.append(y,X)
-    basis = np.ones(N_n)
-    vars = ['y'] + [f'X{i}' for i in  range(1,m+1) ]
+        return a
     
-    if poly_deg == 0:
-        return basis
-    elif poly_deg == 1:
-        basis[1:] = stacked
-        mono_map = ['1','y'] + [f'X{i}' for i in range(1,m+1) ] 
-        # Index. 
+    def get_scaled_legendre_coeffs(self, n_max, b_min, b_max):
+        mu = 0.5 * (b_max + b_min)
+        sigma = 0.5 * (b_max - b_min)
+        a_max = n_max + 1
+        a_scaled = np.zeros((n_max + 1, a_max))
+
+        # affine map x = (z - mu)/sigma
+        p_affine = np.polynomial.Polynomial([-mu / sigma, 1.0 / sigma])
+
+        for n in range(n_max + 1):
+            # Legendre P_n(x)
+            Pn = Legendre.basis(n).convert(kind=np.polynomial.Polynomial)
+            # Compose P_n((z-mu)/sigma)
+            Pn_scaled = Pn(p_affine)
+            # correct normalization for orthonormal basis on [b_min,b_max]
+            # Veryfi the equation of generalized Legendre poly?
+            norm = np.sqrt((2 * n + 1) / ((b_max - b_min)))
+            coef = norm * Pn_scaled.coef
+            a_scaled[n, :coef.shape[0]] = coef
+
+        return a_scaled
+    # utilize numpy for legendre.
+    def legendre_poly(self,x, n):
+        # Coeff vector with 1 at index n
+        c = np.zeros(n + 1)
+        c[n] = 1.0
+        return legval(x, c)
 
 
-    elif poly_deg == 2:
-        # Same as in n=1
-        basis[1:(m+1)+1] = stacked
-        # then add cross terms starting from y. 
-        mono = list(combinations_with_replacement(stacked, poly_deg))
-        mono_map = ['1','y'] + [f'X{i}' for i in range(1,m+1) ] 
-        mono_map_iter = list(combinations_with_replacement(vars, poly_deg))
-        for i in range(0,len(mono)):
-            basis[(m+1)+1+i] = mono[i][0]*mono[i][1]
-            mono_map.append(mono_map_iter[i][0]+mono_map_iter[i][1])
+    def gen_legendre_poly(self,x, n, b_min, b_max):
+        mu = 0.5 * (b_max + b_min)
+        sigma = 0.5 * (b_max - b_min)
 
-    term_index = {term: i for i, term in enumerate(mono_map)}
-
-    return basis,term_index
-
-
-# Then, we are ready for logic to compute this G_n thingy. 
-def poly_G(m,lhc,sigma,poly_deg,index):
-    (a, c, gamma, b, beta,
-                    A, A_star, A_star_inv,
-                    id_mat, r, m, Y_dim,
-                    delta, tenor) = lhc 
-    # get x dim and number of monomial basis
-    N_n = math.comb(poly_deg+1+m,poly_deg)
-    ### Then ready to compute. Only reasonable for n>0. 
-    G_n = np.zeros(shape = (N_n,N_n))
-    if poly_deg == 1:
-        # Get indices to fill:
-        # y parts.
-        G_n[index['X1']:,index['y'] ] = gamma
-
-        # X col part. 
-        G_n[index['y']:,index['X1']: ] = np.vstack([b.T,beta.T])
-
-
-    elif poly_deg == 2:
-        ### First part is the same as earlier -> same rows and entries
-        ##### Mean section
-        # y col
-        G_n[index['X1']:index['yy'],index['y'] ] = gamma
-        # x col
-        G_n[index['y']:index['yy'],index['X1']: index['yy']] = np.vstack([b.T,beta.T])
-
-        ##### Second order section
-        ### When Poly is y**2:
-        # index y^2 col is m+1+1. 
-        G_n[index['yX1']:index['X1X1'],index['yy']] =  2*gamma
-
-        ### Polynomia yx_i i.e. Cross terms.
-        # beta part...
-        G_n[index['yy']:index['X1X1'],index['yX1']:index['X1X1']] =  np.concatenate([b.T,beta.T])
-        # Cross term with gammas (utilize lhc form).
-        gamma_flat = gamma.flatten() 
-
-        for k in range(1, m + 1): # Loop over columns: yX_k
-            col_key = f'yX{k}'
-
-            for i in range(1, m + 1): # Loop over rows: X_i X_k
-                # Handle ordering, e.g., 'X1X2' not 'X2X1'
-                row_key = f'X{i}X{k}' if i <= k else f'X{k}X{i}'
-
-                if row_key in index:
-                    # G_n[row, col] = coeff
-                    # G_n[X_i X_k, yX_k] = gamma_i
-                    G_n[index[row_key], index[col_key]] += gamma_flat[i-1]
+        z = (x - mu) / sigma
+        # norm = np.sqrt((1 + 2 * n) / (2 * sigma**2))
+        norm = np.sqrt((1 + 2 * n) / ( (b_max - b_min)))
         
-        index_to_key = {v: k for k, v in index.items()}
-        ### X cross terms - i.e. cols with XiXj for i!=j
-        for idx in range(index['X1X1'],N_n):
-            i, j = map(int,  re.findall(r'\d+', index_to_key[idx])) 
-            # Fill out mixed deriv cols. yx_i,x1xi,.., xixm
-            if (i<j):
-                G_n[index[f'yX{i}'],index[f'X{i}X{j}']] +=  b.flatten()[j-1]
-                G_n[index[f'yX{j}'],index[f'X{i}X{j}']] +=  b.flatten()[i-1]
-                
-                # X cross contributions for all k
-                for k in range(1, m+1):
-                    key_i = f'X{i}X{k}' if i <= k else f'X{k}X{i}'
-                    key_j = f'X{j}X{k}' if j <= k else f'X{k}X{j}'
-                    if key_i in index:
-                        G_n[index[key_i], index[f'X{i}X{j}']] += beta.T[ k-1,j-1]
-                    if key_j in index:
-                        G_n[index[key_j], index[f'X{i}X{j}']] += beta.T[k-1,i-1]
+        return norm * self.legendre_poly(z, n)
 
-            # The double terms are what we consider now
-            if i == j:
-                G_n[index[f'yX{i}'],index[f'X{i}X{i}']] += sigma[i-1]**2 
-                G_n[index[f'X{i}X{i}'],index[f'X{i}X{i}']] += - sigma[i-1]**2
+    ### What one would need now, is to compute moments of payoff corresponding 
+    ## To monomial basis in a matrix. 
 
-                # Remaining terms.
-                G_n[index[f'yX{i}'],index[f'X{i}X{i}']] += 2 * b.flatten()[i-1]
+    ##### Functionality for expectations. Likely numba for efficiency. 
+        ### Compute conditional moments of Y and X. 
+    def monomial_basis(self,y,X,poly_deg):
+        m = X.shape[0]
+        N_n = math.comb(poly_deg+1+m,poly_deg)
+        stacked = np.append(y,X)
+        basis = np.ones(N_n)
+        vars = ['y'] + [f'X{i}' for i in  range(1,m+1) ]
+        
+        if poly_deg == 0:
+            return basis
+        elif poly_deg == 1:
+            basis[1:] = stacked
+            mono_map = ['1','y'] + [f'X{i}' for i in range(1,m+1) ] 
+            # Index. 
 
-                for run_idx in range(1,m+1):
-                    # logic to flip
-                    if run_idx > i:
-                        G_n[index[f'X{i}X{run_idx}'],index[f'X{i}X{i}']] += 2 *  beta.T[run_idx-1,i-1]
-                    else:
-                        G_n[index[f'X{run_idx}X{i}'],index[f'X{i}X{i}']] +=  2 * beta.T[run_idx-1,i-1]
+
+        elif poly_deg == 2:
+            # Same as in n=1
+            basis[1:(m+1)+1] = stacked
+            # then add cross terms starting from y. 
+            mono = list(combinations_with_replacement(stacked, poly_deg))
+            mono_map = ['1','y'] + [f'X{i}' for i in range(1,m+1) ] 
+            mono_map_iter = list(combinations_with_replacement(vars, poly_deg))
+            for i in range(0,len(mono)):
+                basis[(m+1)+1+i] = mono[i][0]*mono[i][1]
+                mono_map.append(mono_map_iter[i][0]+mono_map_iter[i][1])
+
+        term_index = {term: i for i, term in enumerate(mono_map)}
+
+        return basis,term_index
+
+
+    # Then, we are ready for logic to compute this G_n thingy. 
+    def poly_G(self,m,poly_deg,index):
+        # get x dim and number of monomial basis
+        N_n = math.comb(poly_deg+1+m,poly_deg)
+        ### Then ready to compute. Only reasonable for n>0. 
+        G_n = np.zeros(shape = (N_n,N_n))
+        if poly_deg == 1:
+            # Get indices to fill:
+            # y parts.
+            G_n[index['X1']:,index['y'] ] = -self.gamma
+
+            # X col part. 
+            G_n[index['y']:,index['X1']: ] = np.vstack([self.b.T,self.beta.T])
+
+
+        elif poly_deg == 2:
+            ### First part is the same as earlier -> same rows and entries
+            ##### Mean section
+            # y col
+            G_n[index['X1']:index['yy'],index['y'] ] = self.gamma
+            # x col
+            G_n[index['y']:index['yy'],index['X1']: index['yy']] = np.vstack([self.b.T,self.beta.T])
+
+            ##### Second order section
+            ### When Poly is y**2:
+            # index y^2 col is m+1+1. 
+            G_n[index['yX1']:index['X1X1'],index['yy']] =  2*self.gamma
+
+            ### Polynomia yx_i i.e. Cross terms.
+            # beta part...
+            G_n[index['yy']:index['X1X1'],index['yX1']:index['X1X1']] =  np.concatenate([self.b.T,self.beta.T])
+            # Cross term with gammas (utilize lhc form).
+            gamma_flat = self.gamma.flatten() 
+
+            for k in range(1, m + 1): # Loop over columns: yX_k
+                col_key = f'yX{k}'
+
+                for i in range(1, m + 1): # Loop over rows: X_i X_k
+                    # Handle ordering, e.g., 'X1X2' not 'X2X1'
+                    row_key = f'X{i}X{k}' if i <= k else f'X{k}X{i}'
+
+                    if row_key in index:
+                        # G_n[row, col] = coeff
+                        # G_n[X_i X_k, yX_k] = gamma_i
+                        G_n[index[row_key], index[col_key]] += gamma_flat[i-1]
+            
+            index_to_key = {v: k for k, v in index.items()}
+            ### X cross terms - i.e. cols with XiXj for i!=j
+            for idx in range(index['X1X1'],N_n):
+                i, j = map(int,  re.findall(r'\d+', index_to_key[idx])) 
+                # Fill out mixed deriv cols. yx_i,x1xi,.., xixm
+                if (i<j):
+                    G_n[index[f'yX{i}'],index[f'X{i}X{j}']] +=  self.b.flatten()[j-1]
+                    G_n[index[f'yX{j}'],index[f'X{i}X{j}']] +=  self.b.flatten()[i-1]
                     
-    return G_n
+                    # X cross contributions for all k
+                    for k in range(1, m+1):
+                        key_i = f'X{i}X{k}' if i <= k else f'X{k}X{i}'
+                        key_j = f'X{j}X{k}' if j <= k else f'X{k}X{j}'
+                        if key_i in index:
+                            G_n[index[key_i], index[f'X{i}X{j}']] += self.beta.T[ k-1,j-1]
+                        if key_j in index:
+                            G_n[index[key_j], index[f'X{i}X{j}']] += self.beta.T[k-1,i-1]
 
-#### Calculate moments/covariance.
+                # The double terms are what we consider now
+                if i == j:
+                    G_n[index[f'yX{i}'],index[f'X{i}X{i}']] += self.sigma[i-1]**2 
+                    G_n[index[f'X{i}X{i}'],index[f'X{i}X{i}']] += - self.sigma[i-1]**2
 
-def moments_poly(y,X,lhc,sigma,poly_deg,p_idxs,time_delta):
-    ### Get monomial basis.
-    m = X.shape[0]
-    N_n = math.comb(poly_deg+1+m,poly_deg)
-    basis,index = monomial_basis(y,X,poly_deg)
-    p_coord = np.zeros( N_n)
-    p_coord[p_idxs] = 1
-    G_n = poly_G(m,lhc,sigma,poly_deg,index)
+                    # Remaining terms.
+                    G_n[index[f'yX{i}'],index[f'X{i}X{i}']] += 2 * self.b.flatten()[i-1]
 
-    return basis @ expm(G_n * time_delta) @ p_coord
+                    for run_idx in range(1,m+1):
+                        # logic to flip
+                        if run_idx > i:
+                            G_n[index[f'X{i}X{run_idx}'],index[f'X{i}X{i}']] += 2 *  self.beta.T[run_idx-1,i-1]
+                        else:
+                            G_n[index[f'X{run_idx}X{i}'],index[f'X{i}X{i}']] +=  2 * self.beta.T[run_idx-1,i-1]
+                        
+        return G_n
 
-### this iterrative one is probably best to compute in numba...
+    #### Calculate moments/covariance.
 
-def h_poly(alpha,s,x):
-    '''
-    Computes polynomia h given enumeration.
-    '''
-    
-    return s**alpha[0] * np.prod(alpha[1:]*x)
+    def moments_poly(self,y,X,poly_deg,p_idxs,time_delta,G_n,basis):
+        ### Get monomial basis.
+        m = X.shape[0]
+        N_n = math.comb(poly_deg+1+m,poly_deg)
+        p_coord = np.zeros( N_n)
+        p_coord[p_idxs] = 1
 
-def compute_enumerations(m,n):
-    '''
-    Compute the possible enummerations of degree n. 
-    '''
-    alphas = [alpha for alpha in product(range(n+1), repeat=m+1) if sum(alpha) <= n]
-    alphas = np.array(alphas).T 
-    return alphas
+        return basis @ expm(G_n * time_delta) @ p_coord
+
+    ### this iterrative one is probably best to compute in numba...
+
+    def h_poly(self,alpha,s,x,chi_sym):
+        '''
+        Computes polynomia h given enumeration.
+        '''
+        value =  s**alpha[0] * np.prod(x**alpha[1:])
+
+        chi_sym_out =  chi_sym[0]**alpha[0] * np.prod(chi_sym[1:]**alpha[1:])
+
+        return value, chi_sym_out
+
+    def compute_enumerations(self,m,n):
+        '''
+        Compute the possible enummerations of degree n. 
+        '''
+        alphas = [alpha for alpha in product(range(n+1), repeat=m+1) if sum(alpha) <= n]
+        alphas = np.array(alphas).T 
+        return alphas
+
+    #### Compute expected value and c_pi according to Lemma 4.4
+
+    # can work for n=1
+    def moments_Z(self,alphas,t,t0,t_M,k,y,X,n_max,basis,basis_class,G_n,chi_syms):
+        ### Loop over alpha indices. These correspond to desired basis.
+        ### Compute CDS spread moments. 
+        psi_cds_vec = self.psi_cds(t0,t0,t_M,k)
+        moments = np.zeros(n_max+1)
+
+        # moment loop wrapped in numba
+        for n in range(0,n_max + 1):
+            # Find cols of alphas that should be summed.
+            idx_sum = np.where(np.sum(alphas,axis=0)==n)[0]
+            alphas_comp = alphas[:,idx_sum]
+
+            for idx in range(alphas_comp.shape[1]): 
+                poly, chi_ennum = self.h_poly(alphas_comp[:,idx],y,X,chi_syms)
+                c_pi_val = c_pi(alphas_comp[:,idx],psi_cds_vec)
+                # Get the index of the expectation to compute. Generally works for cond exp
+                e_i = np.zeros(shape = len(basis_class))
+                e_i[basis_class.index(chi_ennum)] = 1
+                term = basis.T @ expm(G_n*(t0-t)) @ e_i
+                
+                moments[n] += c_pi_val * term
+            
+        return moments
+
+    def get_cdso_price(self,t,t0,t_M,Y_t,X_t,strikes,n_max):
+        # Get matrix of a_coeffs
+        prices = np.zeros(strikes.shape[0])
+        moments = np.ones((strikes.shape[0],n_max+1))
+        alphas = self.compute_enumerations(m=self.m, n=n_max)
+
+        ### Precompute a lot of heavy stuff.
+        # get the index vector
+        chi_syms = sp.symbols(f'Y X1:{self.m+1}')   
+        chi_sym = sp.Matrix(chi_syms)               
+        a = self.A @ chi_sym
+        sigma_ext = sp.Matrix([0, *self.sigma])   # prepend 0 symbolically
+        diag_entries = [sp.sqrt(chi_sym[i] * (chi_sym[0] - chi_sym[i])) * sigma_ext[i] for i in range(self.m+1)]
+        b = sp.diag(*diag_entries)
+        # As second term in drift, need monomials to fourth degree.
+        polyclass = mpg(a, b, chi_sym, max_degree=n_max)
+        ### Get moment matrices
+        G_n = polyclass.generator_matrix()
+        chi0 =  np.append([Y_t],X_t)
+        chi_dict = dict(zip(chi_syms,chi0))
+        basis = polyclass.basis_mat.subs(chi_dict).evalf()
+
+        for i,k in enumerate(strikes):
+            # Loop from 0 to n+1 (n)
+            b_min,b_max = self.get_bBounds(t0, t_M,k)   
+            legendre_coeff = self.get_scaled_legendre_coeffs(n_max,b_min,b_max)
+            moments[i,:] = self.moments_Z(alphas,t,t0,t_M,k,y=Y_t,X=X_t,n_max=n_max,
+                                          basis=basis,basis_class=polyclass.basis,
+                                          G_n=G_n,chi_syms=chi_syms) 
+            # Finally do the legendre approximatino
+            for j in range(n_max+1):
+                f_j = self.f_n(j,t,t0,b_min,b_max,Y_t)
+                GLPoly = legendre_coeff[j,:] @ moments[i,:] 
+                prices[i] += f_j * GLPoly
+                print(f'Done with strike {k}, n={j}')
+
+            print(f'Done with strike {k}')
+        return prices
 
 
-#### Compute expected value and c_pi according to Lemma 4.4
-#@njit
-# TODO: look into this again. Should be conditional on deg.
-def c_pi(lhc,t0,t_M,k,alpha):
-    c_pi = 0
-    psi_cds_val = psi_cds(lhc,t0,t0,t_M,k)
-    for i in range(psi_cds_val.shape[0]):
-        indicator = alpha[i]-1 >= 0
-        e_i = np.zeros(psi_cds_val.shape[0])
-        e_i[i] = 1
-        c_pi += indicator * c_pi * psi_cds_val[i]
 
-    return c_pi
+### compute c_pi in numba for faster comp.
+@njit
+def c_pi(alpha,psi_cds_val):
+    # Base case: alpha all zeros
+    if np.sum(alpha) == 0:
+        return 1.0  # or 1.0 if needed by context
 
-# can work for n=1
-def moments_Z(lhc,alphas,sigma,t0,t_M,k,y,X,n=1):
-    # Find cols of alphas that should be summed.
-    idx_sum = np.where(np.sum(alphas,axis=0)==n)[0]
-    alphas_comp = alphas[:,idx_sum]
-    # get the index vector
-    _, basis_idx = monomial_basis(y,X,poly_deg=n)
-    inv_basis =  {v: k for k, v in basis_idx.items()}
-    for idx in range(alphas_comp.shape[1]): 
-        c_pi_val = c_pi(lhc,t0,t_M,k,alphas_comp[idx])
-        poly = h_poly(alphas_comp[idx],y,X)
-        
-        p_idx = np.argmax(alphas_comp[idx])+1
-        term = moments_poly(y,X,lhc,sigma,poly_deg = n,p_idxs=p_idx,time_delta=t_M-t0)
-        moment = c_pi_val * term
-    
-    return moment
+    # Base case: degree 1
+    if np.sum(alpha) == 1:
+        idx = np.argmax(alpha)
+        return psi_cds_val[idx]
+
+    # Recursive case: sum alpha > 1
+    c = 0.0
+    d = len(alpha)
+    for i in range(d):
+        if alpha[i] -1 >=0 :
+            alpha_minus = alpha.copy()
+            alpha_minus[i] -= 1
+            c += psi_cds_val[i] * c_pi(alpha_minus, psi_cds_val)
+    return c

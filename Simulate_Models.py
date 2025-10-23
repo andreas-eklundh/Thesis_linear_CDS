@@ -14,160 +14,168 @@ if __name__ == "__main__":
     from scipy.stats import norm 
 
     ## Some global parameters (simulate forward in time, grid fineness.)
-    T,M = 1, 500
+    T,M = 1, 100
     # Loop over the two different X_dim comps.
     for X_dim in [2,3]:
 
-        ### Simulate 1 LHC dataset with specific parameter Choises.
-        lhc = LHC(0.025,0.4,0.25)
-        Y_dim,m = 1,X_dim
-        # Here, parameters are set already
-        rng = np.random.default_rng(1000)
-        X0 = 0.5
-        chi0 = np.array([1] + [X0]*m)
-        lhc.initialise_LHC(Y_dim,m,X0=X0,rng=rng)
-        lhc.flatten_params()
-        params = lhc.flatten_params()
-        lhc.unflatten_params(params[:2*m+1])
-        # Set also P params. 
-        lhc_P = lhc.build_P_params(rng=rng)
-        params_actual = [lhc.kappa, lhc.theta,lhc.gamma1,lhc.kappa_p,lhc.theta_p,lhc.sigma, lhc.sigma_err]
+        # ### Simulate 1 LHC dataset with specific parameter Choises.
+        # lhc = LHC(0.025,0.4,0.25)
+        # Y_dim,m = 1,X_dim
+        # # Here, parameters are set already
+        # rng = np.random.default_rng(1000)
+        # X0 = 0.3
+        # chi0 = np.array([1] + [X0]*m)
+        # lhc.initialise_LHC(Y_dim,m,X0=X0,rng=rng)
+        # lhc.flatten_params()
+        # params = lhc.flatten_params()
+        # lhc.unflatten_params(params[:2*m+1])
+        #  ### Just for fairness, initialise at mu1 for z
+        # # mu1 = lhc.solve_mu1(lhc.kappa,lhc.theta,lhc.gamma1)
+        # # mu = lhc.compute_stationary(lhc.kappa,lhc.theta,lhc.m,lhc.gamma1,mu1)
+        # # chi0 = np.append([1] , mu)
+        # # Set also P params. 
+        # lhc_P = lhc.build_P_params(rng=rng)
+        # params_actual = [lhc.kappa, lhc.theta,lhc.gamma1,lhc.kappa_p,lhc.theta_p,lhc.sigma, lhc.sigma_err]
 
-        # Simulate. We are using an Euler discretization. 
-        # Start at 0.5 also for aloowing for more jump op and down. Again, likly too large initial cov
-        # Use same seed to reproduce same randomness.
-        mat_grid = np.array([1,3,5,7,10]) # Typical maturity grid
-        # mat_grid = np.array([5]) 
+        # # Simulate. We are using an Euler discretization. 
+        # # Start at 0.5 also for aloowing for more jump op and down. Again, likly too large initial cov
+        # # Use same seed to reproduce same randomness.
+        # mat_grid = np.array([1,3,5,7,10]) # Typical maturity grid
+        # # mat_grid = np.array([5]) 
 
-        n_mat = mat_grid.shape[0]
-        T_path, chi_Q = lhc.simul_latent_states(chi0=chi0,T=T,M=M,n_mat=n_mat,seed=200)
-
-
-        # Holld maturity to be 5
-        t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + T_path[None, :])   # shape (len(T_M_grid), len(t_obs))
-
-        t0 = T_path
-
-        kappa, theta, gamma1 = lhc.kappa,lhc.theta,lhc.gamma1[0]
-        r = lhc.r
-        Y_dim = lhc.Y_dim
-        delta = lhc.delta
-        tenor = lhc.tenor 
-        lhc_numba = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
+        # n_mat = mat_grid.shape[0]
+        # T_path, chi_Q = lhc.simul_latent_states(chi0=chi0,T=T,M=M,n_mat=n_mat,seed=200,scheme='Milstein')
 
 
-        # Draw noise vector:
-        save_path = "./Simulation_studies/"   # <--- change to your path
-        color_cycle = plt.cm.tab10.colors  
+        # # Holld maturity to be 5
+        # t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + T_path[None, :])   # shape (len(T_M_grid), len(t_obs))
 
-        R = norm.rvs(size = (t_mat_grid.shape[0]*t_mat_grid.shape[1]),scale = lhc.sigma_err).reshape(t_mat_grid.shape) # simulate at beginning - faster!
-        CDS_simul_actual = get_CDS_Model(T_path, t0, t_mat_grid, chi_Q.T, lhc_numba)  
-        CDS_simul = CDS_simul_actual+ R
-        # Test of value:
-        print(cds_value(lhc_numba, t0[0], t0[0], t_mat_grid[:,0],CDS_simul[:,0]) @ chi_Q[0,:])
-        print(np.min(CDS_simul),np.max(CDS_simul))
+        # t0 = T_path
 
-        # Reestimation of the Process. Try Kalman filter on the recreated CDS spreads.
-        # Kalman automatically initiates at random. 
-        lhc_kalman_params,  Xn,Zn, Pn= lhc.run_n_kalmans(T_path, t_mat_grid, CDS_simul.T,base_seed=2000,n_restarts=1)
-        # Xn_kalman,Yn_kalman= Xn[:,1:], Xn[:,0]
-        Xn_kalman,Yn_kalman = lhc.kalman_X_Y(T_path,Xn)
-        # Recalculate CDS spreads, if value approach:
-
-        CDS_kalman = Zn # Latent states directly from filter.
-        # Try and calculate anyway. Provide X and Y.
+        # kappa, theta, gamma1 = lhc.kappa,lhc.theta,lhc.gamma1[0]
+        # r = lhc.r
+        # Y_dim = lhc.Y_dim
+        # delta = lhc.delta
+        # tenor = lhc.tenor 
+        # lhc_numba = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
 
 
-        lhc_params = lhc.optimal_parameter_set(t_obs=T_path,T_M_grid=t_mat_grid,CDS_obs=CDS_simul.T,base_seed=3000,n_restarts=1)
-        # utilizing the previous vals
-        X, Y, Z = lhc.get_states(T_path, t_mat_grid, CDS_simul.T)
-        # This way to get CDS spreads is consistent with the article -> do that here. 
-        CDS_model = lhc.CDS_model(T_path, t_mat_grid, CDS_simul.T)
+        # # Draw noise vector:
+        # save_path = "./Simulation_studies/"   # <--- change to your path
+        # color_cycle = plt.cm.tab10.colors  
 
-        np.set_printoptions(precision=4, suppress=True)  # fewer decimals, no scientific notation
-        print(f'Optimal parameters, Kalman: {lhc_kalman_params}')
-        print(f'Optimal Parameters Filipovic {lhc_params}')
-        print(f'Actual Parameters: {params_actual}')
-        param_lhc_names = [f'kappa{i}' for i in range(1,X_dim+1)]+ [f'theta{i}' for i in range(1,X_dim+1)]
-        param_lhc_names += ['gamma1'] + [f'kappa_p{i}' for i in range(1,X_dim+1)]
-        param_lhc_names += [f'theta_p{i}' for i in range(1,X_dim+1)] + [f'sigma{i}' for i in range(1,X_dim+1)]
-        param_lhc_names += [f'sigma_err']
+        # R = norm.rvs(size = (t_mat_grid.shape[0]*t_mat_grid.shape[1]),scale = lhc.sigma_err).reshape(t_mat_grid.shape) # simulate at beginning - faster!
+        # CDS_simul_actual = get_CDS_Model(T_path, t0, t_mat_grid, chi_Q.T, lhc_numba)  
+        # CDS_simul = CDS_simul_actual+ R
+        # # Test of value:
+        # print(cds_value(lhc_numba, t0[0], t0[0], t_mat_grid[:,0],CDS_simul[:,0]) @ chi_Q[0,:])
+        # print(np.min(CDS_simul),np.max(CDS_simul))
 
-        df = pd.DataFrame({
-            'Parameter': param_lhc_names,
-            'Estimated Kalman': lhc_kalman_params,
-            'Estimated Filipovic': np.append(lhc_params,np.zeros(lhc_kalman_params.shape[0] - lhc_params.shape[0])-1),
-            'True': np.concatenate(params_actual),
-        })
-        df['Abs Error, Kalman'] = np.abs(df['Estimated Kalman'] - df['True'])
-        df['Rel Error (%), Kalman'] = 100 * np.abs(df['Estimated Kalman'] - df['True']) / df['True']
-        df['Abs Error, Filipovic'] = np.abs(df['Estimated Filipovic'] - df['True'])
-        df['Rel Error (%), Filipovic'] = 100 * np.abs(df['Estimated Filipovic'] - df['True']) / df['True']
+        # # Reestimation of the Process. Try Kalman filter on the recreated CDS spreads.
+        # # Kalman automatically initiates at random. 
+        # lhc_kalman_params,  Xn,Zn, Pn= lhc.run_n_kalmans(T_path, t_mat_grid, CDS_simul.T,base_seed=2000,n_restarts=1)
+        # # Xn_kalman,Yn_kalman= Xn[:,1:], Xn[:,0]
+        # Xn_kalman,Yn_kalman = lhc.kalman_X_Y(T_path,Xn)
+        # # Recalculate CDS spreads, if value approach:
+
+        # CDS_kalman = Zn # Latent states directly from filter.
+        # # Try and calculate anyway. Provide X and Y.
 
 
-        print(df)
-        df.to_csv(os.path.join(save_path, f'lhc_parameter_comparison_Xdim{X_dim}.csv'), index=False)
+        # # lhc_params = lhc.optimal_parameter_set(t_obs=T_path,T_M_grid=t_mat_grid,CDS_obs=CDS_simul.T,base_seed=3000,n_restarts=1)
+        # # utilizing the previous vals
+        # # X, Y, Z = lhc.get_states(T_path, t_mat_grid, CDS_simul.T)
+        # # # This way to get CDS spreads is consistent with the article -> do that here. 
+        # # CDS_model = lhc.CDS_model(T_path, t_mat_grid, CDS_simul.T)
 
-        # --- Latent states plots ---
-        n_states = chi_Q.shape[1]  # total number of latent states
+        # np.set_printoptions(precision=4, suppress=True)  # fewer decimals, no scientific notation
+        # print(f'Optimal parameters, Kalman: {lhc_kalman_params}')
+        # # print(f'Optimal Parameters Filipovic {lhc_params}')
+        # print(f'Actual Parameters: {params_actual}')
+        # param_lhc_names = [f'kappa{i}' for i in range(1,X_dim+1)]+ [f'theta{i}' for i in range(1,X_dim+1)]
+        # param_lhc_names += ['gamma1'] + [f'kappa_p{i}' for i in range(1,X_dim+1)]
+        # param_lhc_names += [f'theta_p{i}' for i in range(1,X_dim+1)]+ [f'sigma{i}' for i in range(1,X_dim+1)]
+        # param_lhc_names += [f'sigma_err']
 
-        fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-
-        # ---------- Plot 1: Survival process (Y) ----------
-        ax = axes[0]
-        ax.plot(T_path, chi_Q[:, 0], "--", alpha=0.8, label="Y / Survival Process (Q, sim)", color="blue")
-        ax.plot(T_path, Yn_kalman, "-", alpha=0.9, label="Y (Kalman)", color="green")
-        # ax.plot(T_path, Y, "-", alpha=0.9, label="Y (Filipovic)", color="gold")
-
-        ax.set_ylabel("Y / Survival Process")
-        ax.set_title("Latent States: Y and X Dynamics")
-        ax.legend(loc="best")
-        ax.grid(True, linestyle="--", alpha=0.6)
-
-        # ---------- Plot 2: X states ----------
-        ax = axes[1]
-        for i in range(1, n_states):
-            state_name = f"X{i}"
-            ax.plot(T_path, chi_Q[:, i], "o", alpha=0.8, label=f"{state_name} (Q, sim)", color=color_cycle[(i-1) % len(color_cycle)])
-            ax.plot(T_path, X[i-1, :], "-", alpha=0.9, label=f"{state_name} (Filipovic)", color=color_cycle[(i-1) % len(color_cycle)])
-            ax.plot(T_path, Xn_kalman[:, i-1], "--", alpha=0.9, label=f"{state_name} (Kalman)", color=color_cycle[(i-1) % len(color_cycle)])
-
-        ax.set_xlabel("Time (years)")
-        ax.set_ylabel("Latent Factors X")
-        ax.legend(loc="best", ncol=2)
-        ax.grid(True, linestyle="--", alpha=0.6)
-
-        fig.tight_layout()
-        fig.savefig(os.path.join(save_path, f"SimulLHC_LatentStates_Combined_Xdim{X_dim}.png"), dpi=150)
-        plt.close(fig)
+        # df = pd.DataFrame({
+        #     'Parameter': param_lhc_names,
+        #     'Estimated Kalman': lhc_kalman_params,
+        #     # 'Estimated Filipovic': np.append(lhc_params,np.zeros(lhc_kalman_params.shape[0] - lhc_params.shape[0])),
+        #     'True': np.concatenate(params_actual),
+        # })
+        # df['Abs Error, Kalman'] = np.abs(df['Estimated Kalman'] - df['True'])
+        # df['Rel Error (%), Kalman'] = 100 * np.abs(df['Estimated Kalman'] - df['True']) / df['True']
+        # # df['Abs Error, Filipovic'] = np.abs(df['Estimated Filipovic'] - df['True'])
+        # # df['Rel Error (%), Filipovic'] = 100 * np.abs(df['Estimated Filipovic'] - df['True']) / df['True']
 
 
-        # --- CDS spreads plot ---
-        fig, ax = plt.subplots(figsize=(10,5))
+        # print(df)
+        # df.to_excel(os.path.join(save_path, f'lhc_parameter_comparison_Xdim{X_dim}.xlsx'), index=False)
 
-        for i in range(CDS_simul.shape[0]):
-            ax.plot(T_path, CDS_simul_actual[i,:], "-", alpha=0.9, label=f"CDS, T_mat={mat_grid[i]}", color='red')
-            ax.plot(T_path, CDS_simul[i,:], "-", alpha=0.7, label=f"CDS corrupted, T_mat={mat_grid[i]}", color='black')
-            ax.plot(T_path, CDS_kalman[:, i], "--", alpha=0.9, label=f"CDS Kalman, T_mat={mat_grid[i]}", color='green')
-            ax.plot(T_path, CDS_model[:, i], "--", alpha=0.9, label=f"CDS Filipovic, T_mat={mat_grid[i]}", color='yellow')
+        # # --- Latent states plots ---
+        # n_states = chi_Q.shape[1]  # total number of latent states
 
-        ax.set_xlabel("Time (years)")
-        ax.set_ylabel("CDS Spreads")
-        ax.set_title("CDS Spreads Comparison")
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(os.path.join(save_path, f"SimulLHC_CDS_Spreads_Xdim{X_dim}.png"), dpi=150)
-        plt.close(fig)
+        # fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+        # # ---------- Plot 1: Survival process (Y) ----------
+        # ax = axes[0]
+        # ax.plot(T_path, chi_Q[:, 0], "-", alpha=0.8, label="Y / Survival Process (Q, sim)", color="blue")
+        # ax.plot(T_path, Yn_kalman, "-.", alpha=0.9, label="Y (Kalman)", color="green")
+        # # ax.plot(T_path, Y, "--", alpha=0.9, label="Y (Filipovic)", color="gold")
+
+        # ax.set_ylabel("Y / Survival Process")
+        # ax.set_title("Latent States: Y and X Dynamics")
+        # ax.legend(loc="best")
+        # ax.grid(True, linestyle="--", alpha=0.6)
+
+        # # ---------- Plot 2: X states ----------
+        # ax = axes[1]
+        # for i in range(1, n_states):
+        #     state_name = f"X{i}"
+        #     ax.plot(T_path, chi_Q[:, i], "-", alpha=0.8, label=f"{state_name} (Q, sim)", color=color_cycle[(i-1) % len(color_cycle)])
+        #     # ax.plot(T_path, X[i-1, :], "-.", alpha=0.9, label=f"{state_name} (Filipovic)", color=color_cycle[(i-1) % len(color_cycle)])
+        #     ax.plot(T_path, Xn_kalman[:, i-1], "--", alpha=0.9, label=f"{state_name} (Kalman)", color=color_cycle[(i-1) % len(color_cycle)])
+
+        # ax.set_xlabel("Time (years)")
+        # ax.set_ylabel("Latent Factors X")
+        # ax.legend(loc="best", ncol=2)
+        # ax.grid(True, linestyle="--", alpha=0.6)
+
+        # fig.tight_layout()
+        # fig.savefig(os.path.join(save_path, f"SimulLHC_LatentStates_Combined_Xdim{X_dim}.png"), dpi=150)
+        # plt.close(fig)
+
+
+        # # --- CDS spreads plot ---
+        # fig, ax = plt.subplots(figsize=(10,5))
+
+        # for i in range(CDS_simul.shape[0]):
+        #     ax.plot(T_path, CDS_simul_actual[i,:], "-", alpha=0.9, label=f"CDS, T_mat={mat_grid[i]}", color='red')
+        #     ax.plot(T_path, CDS_simul[i,:], "-", alpha=0.7, label=f"CDS corrupted, T_mat={mat_grid[i]}", color='black')
+        #     ax.plot(T_path, CDS_kalman[:, i], "--", alpha=0.9, label=f"CDS Kalman, T_mat={mat_grid[i]}", color='green')
+        #     # ax.plot(T_path, CDS_model[:, i], "--", alpha=0.9, label=f"CDS Filipovic, T_mat={mat_grid[i]}", color='yellow')
+
+        # ax.set_xlabel("Time (years)")
+        # ax.set_ylabel("CDS Spreads")
+        # ax.set_title("CDS Spreads Comparison")
+        # ax.legend()
+        # fig.tight_layout()
+        # fig.savefig(os.path.join(save_path, f"SimulLHC_CDS_Spreads_Xdim{X_dim}.png"), dpi=150)
+        # plt.close(fig)
 
 
 
 
         #### CIR SIMULATION. ######
+        save_path = "./Simulation_studies/"   # <--- change to your path
 
-        seed = 1041
+        seed = 2000
         cir = CIR(0.0252, 0.4, 0.25,X_dim)
+        r = cir.r
+        delta = cir.delta
+        tenor = cir.tenor 
         # params_actual =np.array([-0.1115+0.2247,0.2247*0.0611/(-0.1115+0.2247),0.0702,0.2247,0.0611,0.003]) # Use params from a article
-        cir.set_params(params=None, seed=seed+1)
+        cir.set_params(params=None, seed=seed)
         print(cir.kappa,cir.theta,cir.sigma,cir.kappa_p,cir.theta_p,cir.sigma_err)
         params_cir = np.concatenate([cir.kappa,cir.theta,cir.sigma,cir.kappa_p,cir.theta_p,cir.sigma_err])
         # Simulate. We are using an Euler discretization. 
@@ -192,7 +200,9 @@ if __name__ == "__main__":
             lambda_curr  = np.array([lambda_mil_Q[i]])
             mat_curr = t_mat_grid[:,i]
             CDS_cir[i,:] = cir.cds_spread(lambda_curr,params_cir,T_return[i],mat_curr)
+            # CDS_cir[i,:] = cir.cds_spread(lambda_curr,params_cir,0.0,mat_grid)
 
+        # Add the citter to spreads.
 
         ### See how spreads, and states look
 
@@ -286,7 +296,7 @@ if __name__ == "__main__":
         df['Rel Error (%)'] = 100 * np.abs(df['Estimated'] - df['True']) / df['True']
 
         print(df)
-        df.to_csv(os.path.join(save_path, f'cir_parameter_comparison_Xdim{X_dim}.csv'), index=False)
+        df.to_excel(os.path.join(save_path, f'cir_parameter_comparison_Xdim{X_dim}.xlsx'), index=False)
 
 
         # --- Latent state (simulated vs Kalman estimate) ---
@@ -304,7 +314,7 @@ if __name__ == "__main__":
 
         # Optionally add simulated versions if available (like lambda_mil_Q / lambda_mil_P)
             if 'lambda_mil_Q' in locals():
-                ax1.plot(T_return, lambda_mil_Q[:,i], "o", alpha=0.7, label=f"Simulated X{i+1} (CIR)", color=color)
+                ax1.plot(T_return, lambda_mil_Q[:,i], "-", alpha=0.7, label=f"Simulated X{i+1} (CIR)", color=color)
 
         ax1.set_xlabel("Time (years)")
         ax1.set_ylabel("Latent State")

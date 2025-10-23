@@ -30,10 +30,16 @@ class CIRIntensity():
                 rng = np.random.default_rng()  # independent each time
             else:
                 rng = np.random.default_rng(seed)  # independent each time
-
+            # Default (short/med) factors
             self.kappa = rng.uniform(0.2, 0.8, size=(X_dim,))
-            self.theta =  rng.uniform(0.01, 0.1, size=(X_dim,))
-            self.sigma =  rng.uniform(0.01, np.sqrt(2*self.kappa*self.theta), size=(X_dim,))
+            self.theta = rng.uniform(0.01, 0.1, size=(X_dim,))
+            self.sigma = rng.uniform(0.01, np.sqrt(2*self.kappa*self.theta), size=(X_dim,))
+
+            # Force the last factor to be long-term (small kappa, larger theta)
+            long_idx = -1
+            self.kappa[long_idx] = rng.uniform(0.01, 0.12)      # slow mean reversion
+            self.theta[long_idx] = rng.uniform(0.05, 0.25)      # larger long-run mean
+            self.sigma[long_idx] = rng.uniform(0.001, np.sqrt(2*self.kappa[long_idx]*self.theta[long_idx]))
             # initialise all positive.
             self.kappa_p = self.kappa + 0.1 # just initialise these clsoe to each other
             self.theta_p = self.theta + 0.01 # just initialise these clsoe to each other
@@ -188,7 +194,8 @@ class CIRIntensity():
     def calc_protection_leg(self,params,t,t0,t_mat, lambda_t):
         x = np.zeros(self.X_dim)
 
-        integrand = lambda u: ((1- self.delta)*np.exp(-self.r * (u-t)) * (self.cir_derivatives(params,x,u-t)[0] + 
+        integrand = lambda u: ((1- self.delta)*np.exp(-self.r * (u-t)) * (
+            self.cir_derivatives(params,x,u-t)[0] + 
             self.cir_derivatives(params,x,u-t)[1] @ lambda_t.T)*
             self.Laplace_Transform(params,lambda_t.T, u - t)
             )
@@ -256,48 +263,24 @@ class CIRIntensity():
         return m_k, P_k
 
 
-    def get_cond_var(self,A, Sigma_prod, Delta):
-        # Is logic can work completeley, just consider  A'=-A. Then same form
-        Lambda, E = np.linalg.eig(A) # Just eigenvalues as array, columns are eigenvectors.
-
-        S_bar = np.linalg.inv(E) @ Sigma_prod @ np.linalg.inv(E).T
-
-        dim = A.shape[0] # assume every matrix is of same size and shape.
-
-        # Then V_Delta.
-        V_Delta = np.zeros((dim,dim))
-        V_Delta_inf = np.zeros((dim,dim))
-
-        for i in range(0,dim):
-            for j in range(0,dim):
-                exp_factor = (1-np.exp(-(Lambda[i] + Lambda[j]) * Delta))
-                V_Delta[i,j] = S_bar[i,j] * exp_factor / (Lambda[i] + Lambda[j])
-                V_Delta_inf[i,j] = S_bar[i,j] / (Lambda[i] + Lambda[j])
-
-        Var = E @ V_Delta @ E.T
-        Var_inf = E @ V_Delta_inf @ E.T
-
-
-        return Var, Var_inf
-
     # Kalman filtering.
     def Kalman(self,params,t_obs, t_mat_grid, Y, result = False):
         print(params)
         kappa,theta,sigma,kappa_p,theta_p,sigma_err = self.unpack_params(params)
         # Stop optimization if bad initial params.
         # positivity constraints (soft bounds)
-        if np.any(params <= 0):
-            return 1e12
+        # if np.any(params <= 0):
+        #     return 1e12
 
-        # Feller condition: 2*kappa_p*theta_p - sigma^2 >= 0
-        feller_val = 2 * kappa_p * theta_p - sigma**2
-        if np.any(feller_val < 0):
-            return 1e12
+        # # Feller condition: 2*kappa_p*theta_p - sigma^2 >= 0
+        # feller_val = 2 * kappa_p * theta_p - sigma**2
+        # if np.any(feller_val < 0):
+        #     return 1e12
 
-        # Add feller under both - will hold also for matrices
-        feller_val = 2 * kappa * theta - sigma**2
-        if np.any(feller_val < 0):
-            return 1e12
+        # # Add feller under both - will hold also for matrices
+        # feller_val = 2 * kappa * theta - sigma**2
+        # if np.any(feller_val < 0):
+        #     return 1e12
 
         n_obs = t_mat_grid.shape[1]
         n_mat = t_mat_grid.shape[0]
@@ -333,8 +316,14 @@ class CIRIntensity():
         # To speed up, solve ricatti equations. Will be time homogenous.
         # Solve Ricatti Equations. Might move inside loop later - MUCH FASTER OUT HERE, IF SAME DIST APPROX.
         # THIS WILL LIKELY DO.
-        a,A =  self.cir_solution(params,x0 = x0_zcb,T = t_mat_grid[:,0]- t_obs[0])
+        a,A =  self.cir_solution(params,x0 = x0_zcb,T = t_mat_grid[:,0] - t_obs[0])
         a,A = -a,-A
+
+        # Utilize that we can compute this up front.
+        # Create arrays based on obs.
+        phi_0 = (np.identity(kappa_P_diag.shape[0])-expm(-kappa_P_diag * Delta)) @ theta_p
+        phi_X = expm(-kappa_P_diag * Delta)
+
         for n in range(0,n_obs):
             # UPDATE STEP
             Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
@@ -347,19 +336,20 @@ class CIRIntensity():
                 Pn_out[n,:,:] = Pn
 
             # Update log likelihood.
-            det_S = np.abs(np.linalg.det(S_k))
-            try:
-                S_inv = np.linalg.inv(S_k)
-            except:
+            det_S = np.linalg.det(S_k)
+            if det_S < 0:
+                return 1e12 #,Xn, Zn, Pn 
+
+            # Some fallback / numerical fixes
+            if (np.isnan(det_S)) | (det_S < 1e-12) :
                 S_inv = np.linalg.pinv(S_k)
+            else:
+                S_inv = np.linalg.inv(S_k) 
 
             log_likelihood += - 0.5 * (S_k.shape[0] * np.log(2*np.pi) + np.log(det_S) +
                                         vn.T @ S_inv @ vn
             )
 
-            # Create arrays based on obs.
-            phi_0 = (np.identity(kappa_P_diag.shape[0])-expm(-kappa_P_diag * Delta)) @ theta_p
-            phi_X = expm(-kappa_P_diag * Delta)
             # Use CIR Variance for this (not going to need it)
             if (n < n_obs - 1): # Not sensible to predict further.
                 # Works for Uncorrelated and indep noise.
@@ -369,6 +359,7 @@ class CIRIntensity():
 
                 Delta = t_obs[n+1] - t_obs[n]
                 pred_Xn, pred_Pn = self.Prediction_step(Xn,Pn,phi_X,phi_0,Q_t)
+                # Ensure positivity.
                 pred_Xn = np.maximum(pred_Xn, 1e-6)
         if result == True:
             return Xn_out,Zn_out, Pn_out
@@ -400,16 +391,17 @@ class CIRIntensity():
         self.set_params(params=None,seed=seed)
 
         # Get initial values. Z
-        x0 = np.concatenate([self.kappa, self.theta, self.sigma, self.kappa_p, self.theta_p,self.sigma_err])
+        x0 = np.concatenate([self.kappa, self.theta, self.sigma, 
+                             self.kappa_p, self.theta_p,self.sigma_err])
         x0 = x0.flatten()
 
         # Try a different optimizer than nelder mead
         d = self.X_dim  # number of factors
 
         bounds = (
-            [(1e-6, 3)] * d +     # kappa
+            [(1e-6, 1)] * d +     # kappa
             [(1e-6, 1)] * d +     # theta
-            [(1e-6, 3)] * d +     # kappa_p
+            [(1e-6, 1)] * d +     # kappa_p
             [(1e-6, 1)] * d +     # theta_p
             [(1e-6, 1)] * d +     # sigma (assuming per-factor vol)
             [(1e-6, 0.5)]         # sigma_err
@@ -420,7 +412,6 @@ class CIRIntensity():
             func=self.Kalman,
             bounds=bounds,
             constraints=(nonlinear_constraint,),
-            # args=(t_obs[::3], t_mat_grid[:, ::3], Y[::3, :]),
             args=(t_obs, t_mat_grid, Y),
             strategy='best1bin',
             popsize=5,         # larger popsize -> more exploration
@@ -436,27 +427,10 @@ class CIRIntensity():
             return result.x, 0, 0, 0
 
         # --- Local Refinement ---
-        n_params = 5*d + 1  # adjust to actual number of params
-        lower_bounds = 1e-8 * np.ones(n_params)  # small positive number to avoid zero
-        upper_bounds = np.full(n_params, np.inf)
+        # not doing it. slow and yields very little.
 
-        bounds = Bounds(lower_bounds, upper_bounds)
-        nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
-
-        # --- Local Fine Optimization ---
-        res = minimize(
-            self.Kalman,
-            x0=result.x,
-            args=(t_obs, t_mat_grid, Y),
-            method='trust-constr',          # supports nonlinear constraints
-            bounds=bounds,
-            constraints=[nonlinear_constraint],
-            options={'maxiter': 200, 'gtol': 1e-6, 'verbose': 2}
-        )
-
-
-        params = res.x
-        self.kalman_obj  = res.fun
+        params = result.x
+        self.kalman_obj  = result.fun
         # Run and return solution
         Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
 

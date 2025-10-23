@@ -361,19 +361,19 @@ def update_step_cds(X_pred, P_pred, h,h_p, R_k, t_obs,t0, t_mats, lhc, CDS_k):
 
 
 @njit
-def build_P_params(params,gamma1,lhc_p):
+def build_P_params(params,theta,gamma1,lhc_p):
         (a, c, gamma, b, beta,
                     A, A_star, A_star_inv,
                     id_mat, r, m, Y_dim,
                     delta, tenor) = lhc_p 
-        kappa, theta = params[:m],params[m:2*m]
-        sigma_i,sigma_err = params[2*m:3*m], params[-1]
+        kappa = params[:m]
+        sigma_i,sigma_err =params[m:2*m], params[-1]
 
         # Rebuild P parameters.
         lhc = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
 
 
-        return lhc,kappa,theta, sigma_i, sigma_err
+        return lhc,kappa, sigma_i, sigma_err
 
 
 
@@ -506,7 +506,7 @@ def get_states(lhc, t_obs, T_M_grid, CDS_obs,X0):
         if time_idx == 0:
             Y[time_idx]=1 
         else:
-            Y[time_idx] = Y_prev + dt * (lhc.gamma.flatten() @ X_prev)
+            Y[time_idx] = Y_prev + dt * (gamma.flatten() @ X_prev)
         
         X[:,time_idx] = Y[time_idx] * Z[:,time_idx]
 
@@ -582,7 +582,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0,G_n,p_idx_
     # Define the parameters already to be able to look over them
     gamma1 = params[2*m]
     params_p = params[2*m+1:]
-    kappa_p,theta_p, sigma, sigma_err = params_p[:m],params_p[m:2*m],params_p[2*m:3*m] ,params_p[-1]
+    kappa_p, sigma, sigma_err = params_p[:m],params_p[m:2*m],params_p[-1]
     # lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,gamma1,lhc_p)
     params_q = params[:2*m+1]
     kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
@@ -615,8 +615,8 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0,G_n,p_idx_
     # Initial Predictions of means and cov
     # Only criteria on mu1 - mu1 < k/kappa. Set to theta
     Y0 = 1
-    mu1 = solve_mu1(kappa_p, theta_p, gamma1)
-    mu = compute_stationary(kappa_p,theta_p,m,gamma1,mu1= mu1)
+    mu1 = solve_mu1(kappa_p, theta, gamma1)
+    mu = compute_stationary(kappa_p,theta,m,gamma1,mu1= mu1)
     # Note, mu corresponds to X initially.
     pred_Xn = np.append([1],mu) #drift_term(mu,lhc_p,Delta) #mu
     # Just set the covariance guess to the innovated one.
@@ -629,6 +629,11 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0,G_n,p_idx_
     #pred_Pn = P0[1:,1:] 
     pred_Pn = P0
 
+    ## Asuume same time point dist so not needed to compute every time.
+    A_kalman = mat_exp_approx(A,Delta)
+
+    G_prod = precompute_G_products(G_n, p_idx_matrix, Delta)
+    
     # Run algo. 
     for n in range(0,n_obs):
         # Extended kalman filter.
@@ -665,11 +670,10 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0,G_n,p_idx_
             Delta = t_obs[n+1] - t_obs[n] # Only apprx for now. Move to loop maybe.
             
             # Pure Euler
-            A_kalman = mat_exp_approx(A,Delta)
             pred_Xn = A_kalman @ Xn[n,:]
             # New Q_t is poly cov.
-            Q_k = compute_second_moment_numba(Xn[n,0],Xn[n,1:],G_n,p_idx_matrix,Delta) -np.outer(pred_Xn,pred_Xn)
-            
+            basis = monomial_basis_numba(Xn[n,0],Xn[n,1:],poly_deg=2)
+            Q_k = compute_second_moment_from_basis(basis,G_prod) -np.outer(pred_Xn,pred_Xn)
             pred_Pn =  A_kalman @ Pn[n,:,:] @ A_kalman.T + Q_k
 
     return - log_likelihood, Xn, Zn, Pn 
@@ -679,9 +683,9 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
     # For numerical stability.
     params_p = params[2*m+1:]
     params_q = params[:2*m+1]
-    kappa_p, theta_p = params_p[:m],params_p[m:2*m]
+    kappa_p = params_p[:m]
     kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
-    lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
+    lhc_p = rebuild_lhc_struct(kappa_p, theta, gamma1, r, Y_dim, delta, tenor)
     lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
 
     ## Compute conditional moments...
@@ -689,7 +693,7 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
     poly_deg = 2
     N_n = math.comb(poly_deg+1+m,poly_deg)
     basis,index = monomial_basis(1,np.ones(shape=m),poly_deg)
-    G_n = poly_G(m,lhc_p,params_p[2*m:-1],poly_deg,index)
+    G_n = poly_G(m,lhc_p,params_p[m:-1],poly_deg,index)
 
     # Get coordinate vectors. 
     names = ['y'] + [f'X{i+1}' for i in range(m)]
@@ -705,6 +709,7 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
             p_idx_matrix[i,j] = index[key_str]
 
     # kalman filter
+    print(params)
     neg_loglik,_, _, _ = kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0,G_n,p_idx_matrix)
 
     return neg_loglik
@@ -721,11 +726,10 @@ def nonlinear_constraints( params, m):
 
     params_p = params[2*m+1:]
     params_q = params[:2*m+1]
-    kappa_p, theta_p,sigma,sigma_err = params_p[:m],params_p[m:2*m],params_p[2*m:3*m],params_p[-1]
+    kappa_p,sigma,sigma_err = params_p[:m],params_p[m:2*m],params_p[-1]
     kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
     # ensure arrays
     kappa_p = np.asarray(kappa_p, dtype=float)
-    theta_p = np.asarray(theta_p, dtype=float)
     sigma = np.asarray(sigma, dtype=float)
 
     # Build constraints: all should be >= 0
@@ -738,7 +742,7 @@ def nonlinear_constraints( params, m):
 
     # g2 >= 0  -> theta_p[-1] * kappa_p[-1] - sigma[-1]^2/2 >= 0
     for i in range(m):
-        g2 = theta_p[i] * kappa_p[i] - 0.5 * (sigma[i] ** 2)
+        g2 = theta[i] * kappa_p[i] - 0.5 * (sigma[i] ** 2)
         cons.append(g2)
     # g3 <= 0 -> -g3 >= 0
     for i in range(m):
@@ -748,7 +752,7 @@ def nonlinear_constraints( params, m):
 
     # g4 <= 0 -> -g4 >= 0
     for i in range(m):
-            g4 = gamma1 - kappa_p[i] + kappa_p[i] * theta_p[i] + 0.5 * (sigma[i] ** 2)
+            g4 = gamma1 - kappa_p[i] + kappa_p[i] * theta[i] + 0.5 * (sigma[i] ** 2)
             cons.append(-g4)
 
     cons = np.asarray(cons, dtype=float)
@@ -1050,20 +1054,20 @@ class LHC_single():
 
 
 ######################### KALMAN FILTER SECTION #########################
-    def build_P_params(self,params=None, gamma1=None,rng=None):
+    def build_P_params(self,params=None,theta=None, gamma1=None,rng=None):
         # NOTE: Gamma does not change!
         if params is None:
             if rng is None:
                 rng = np.random.default_rng()  # independent each time
             Y_dim, X_dim = self.Y_dim, self.m
             gamma1 = self.gamma1[0]
-
+            theta = self.theta
             # Set inital values. Need to comply with (38)
             kappa = rng.uniform(gamma1, 0.99, size=(X_dim,))       # Kappa given 
-            theta = np.zeros(X_dim)
+            # theta = np.zeros(X_dim)
 
-            for i in range(0,self.m):
-                theta[i] = rng.uniform(1e-6, 1-gamma1/kappa[i], size=(1,))       # Theta coeffs
+            # for i in range(0,self.m):
+            #     theta[i] = rng.uniform(1e-6, 1-gamma1/kappa[i], size=(1,))       # Theta coeffs
             
             ### New stuff: All the ones needed here e.g. sigma, sigma_Err
             sigma_i = rng.uniform(0.1, 0.7, size=(X_dim,))       # Kappa given 
@@ -1079,8 +1083,8 @@ class LHC_single():
 
         else:
             gamma1 = gamma1[0] # due to parametrization
-            kappa, theta = params[:self.m],params[self.m:2*self.m]
-            sigma_i,sigma_err = params[2*self.m:3*self.m], np.array([params[-1]])
+            kappa = params[:self.m]
+            sigma_i,sigma_err =params[self.m:2*self.m], np.array([params[-1]])
             r = self.r
             Y_dim = self.Y_dim
             delta = self.delta
@@ -1088,7 +1092,7 @@ class LHC_single():
             # Rebuild P parameters.
             lhc = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
 
-        self.kappa_p,self.theta_p, self.sigma, self.sigma_err=kappa,theta, sigma_i, sigma_err
+        self.kappa_p, self.sigma, self.sigma_err=kappa, sigma_i, sigma_err
 
         return lhc
 
@@ -1129,7 +1133,6 @@ class LHC_single():
             [(1e-6, 1)] * m +     # theta
             [(0.001,1)] +        # gamma1
             [(1e-6, 1)] * m +     # kappa_p
-            [(1e-6, 1)] * m +     # theta_p
             [(1e-6, 1)] * m +     # sigma 
             [(1e-6, 0.5)]         # sigma_err
         )
@@ -1195,9 +1198,9 @@ class LHC_single():
         else:
             params_p = optim_params[2*m+1:]
             params_q = optim_params[:2*m+1]
-            kappa_p, theta_p = params_p[:m],params_p[m:2*m]
+            kappa_p = params_p[:m]
             kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
-            lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
+            lhc_p = rebuild_lhc_struct(kappa_p, theta, gamma1, r, Y_dim, delta, tenor)
             lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
 
             ## Compute conditional moments...
@@ -1205,7 +1208,7 @@ class LHC_single():
             poly_deg = 2
             N_n = math.comb(poly_deg+1+m,poly_deg)
             basis,index = monomial_basis(1,np.ones(shape=m),poly_deg)
-            G_n = poly_G(m,lhc_p,params_p[2*m:-1],poly_deg,index)
+            G_n = poly_G(m,lhc_p,params_p[m:-1],poly_deg,index)
 
             # Get coordinate vectors. 
             names = ['y'] + [f'X{i+1}' for i in range(m)]
@@ -1224,7 +1227,7 @@ class LHC_single():
             neg_loglik, Xn, Zn, Pn = kalmanfilter_opt(optim_params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0,G_n,p_idx_matrix)
 
             # Build structures in very end to take onwards.
-            self.build_P_params(optim_params,np.array([gamma1]))
+            self.build_P_params(optim_params,theta,np.array([gamma1]))
             self.flatten_params()
             self.unflatten_params(params_q)
             
@@ -1240,7 +1243,7 @@ class LHC_single():
             # Set Q parameters.
             self.initialise_LHC(self.Y_dim,self.m,self.X0,rng)
             # Get P Parameters /initialise
-            lhc_p = self.build_P_params(params=None, gamma1=None,rng=rng)
+            lhc_p = self.build_P_params(params=None, theta=None, gamma1=None,rng=rng)
             
             # Set the error to be the Stddeviation of CDS_obs
             #self.sigma_err = np.std(CDS_obs).flatten()
@@ -1249,7 +1252,6 @@ class LHC_single():
 
             x0_P = np.concatenate([
                 self.kappa_p.flatten(),
-                self.theta_p.flatten(),
                 self.sigma.flatten(),
                 self.sigma_err
             ])
@@ -1261,7 +1263,7 @@ class LHC_single():
                                 delta, tenor) = lhc_p
             gamma1 = x0[2*m]
             params_p = x0[2*m+1:]
-            lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,gamma1,lhc_p)
+            lhc_p,kappa_p, sigma, sigma_err = build_P_params(params_p,self.theta,gamma1,lhc_p)
             params_q = x0[:2*m+1]
             kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
             # build Q class outside wrapper too:
@@ -1334,11 +1336,11 @@ class LHC_single():
         # Get A matrix. Add argument if timul under P or Q.
         params_Q = np.concatenate([self.kappa,self.theta,self.gamma1])
         # If params have been sat with meaningfull values
-        params_P = np.concatenate([self.kappa_p,self.theta_p, self.sigma, self.sigma_err])
+        params_P = np.concatenate([self.kappa_p, self.sigma, self.sigma_err])
         # If explicitly given, manual sigma is used.
         params = np.concatenate([params_Q,params_P])
         # Set also P params. 
-        lhc_p = self.build_P_params(params_P,self.gamma1)
+        lhc_p = self.build_P_params(params_P,self.theta, self.gamma1)
         _,cov_trans,_ = build_matrices(lhc_p,self.sigma,self.sigma_err,n_mat)
     
         self.rebuild_dynamics()
@@ -1380,7 +1382,7 @@ class LHC_single():
     def get_cdso_pric_MC(self,t,t0,t_M,strikes,chi0,N,M,seed=1000, P_params=None):
         # If p params specific (Sigma specific), se can calculate for differnt sigma
         if P_params is not None:
-            lhc_p = self.build_P_params(P_params,self.gamma1)
+            lhc_p = self.build_P_params(P_params,self.theta,self.gamma1)
 
         # Get LHC_Q for pricing
         lhc = rebuild_lhc_struct(self.kappa, self.theta, self.gamma1[0], self.r,
@@ -1429,7 +1431,7 @@ class LHC_single():
         '''
         # If p params specific (Sigma specific), se can calculate for differnt sigma
         if P_params is not None:
-            lhc_p = self.build_P_params(P_params,self.gamma1)
+            lhc_p = self.build_P_params(P_params,self.theta,self.gamma1)
 
         # N prices are comuted and averaged MC
         N_strikes = barriers.shape[0]
@@ -1495,7 +1497,7 @@ class LHC_single():
         cds_min =  np.zeros(shape = N)
         # If p params specific (Sigma specific), se can calculate for differnt sigma
         if P_params is not None:
-            lhc_p = self.build_P_params(P_params,self.gamma1)
+            lhc_p = self.build_P_params(P_params,self.theta,self.gamma1)
         lhc = rebuild_lhc_struct(self.kappa, self.theta, self.gamma1[0], self.r,
                             self.Y_dim, self.delta, self.tenor)
         # N prices are comuted and averaged MC
@@ -1756,33 +1758,57 @@ def moments_poly(y,X,lhc,sigma,poly_deg,p_idxs,time_delta):
     return basis @ expm(G_n * time_delta) @ p_coord
 
 
+# @njit
+# def compute_second_moment_numba(y,X, G_n, p_idx_matrix, time_delta):
+#     basis = monomial_basis_numba(y,X,poly_deg = 2)
+#     n_dim = p_idx_matrix.shape[0]
+#     second_moment = np.zeros((n_dim, n_dim))
+    
+#     # Compute expm once (Numba-compatible)
+#     G_exp = mat_exp_approx(G_n, time_delta)
+    
+#     # Fill upper triangle
+#     for i in range(n_dim):
+#         for j in range(i, n_dim):
+#             p_idx = p_idx_matrix[i, j]
+#             p_vec = np.zeros(G_n.shape[0])
+#             p_vec[p_idx] = 1.0
+#             second_moment[i, j] = basis @ G_exp @ p_vec
+    
+#     # Symmetrize
+#     for i in range(n_dim):
+#         for j in range(i):
+#             second_moment[i, j] = second_moment[j, i]
+    
+#     return second_moment
+
+
 @njit
-def compute_second_moment_numba(y,X, G_n, p_idx_matrix, time_delta):
-    basis = monomial_basis_numba(y,X,poly_deg = 2)
-    n_dim = p_idx_matrix.shape[0]
-    second_moment = np.zeros((n_dim, n_dim))
-    
-    # Compute expm once (Numba-compatible)
+def precompute_G_products(G_n, p_idx_matrix, time_delta):
+    """Precompute exp(G_n * dt) @ p_vec for all (i, j) entries."""
     G_exp = mat_exp_approx(G_n, time_delta)
-    
-    # Fill upper triangle
+    n_dim = p_idx_matrix.shape[0]
+    n_basis = G_n.shape[0]
+    G_products = np.zeros((n_dim, n_dim, n_basis))
+
     for i in range(n_dim):
         for j in range(i, n_dim):
             p_idx = p_idx_matrix[i, j]
-            p_vec = np.zeros(G_n.shape[0])
+            p_vec = np.zeros(n_basis)
             p_vec[p_idx] = 1.0
-            second_moment[i, j] = basis @ G_exp @ p_vec
+            G_products[i, j, :] = G_exp @ p_vec
+            if i != j:
+                G_products[j, i, :] = G_products[i, j, :]  # symmetry
+    return G_products
+
+
+@njit
+def compute_second_moment_from_basis(basis, G_products):
+    """Compute second moment given precomputed G_products and basis."""
+    n_dim = G_products.shape[0]
+    second_moment = np.zeros((n_dim, n_dim))
     
-    # Symmetrize
     for i in range(n_dim):
-        for j in range(i):
-            second_moment[i, j] = second_moment[j, i]
-    
+        for j in range(n_dim):
+            second_moment[i, j] = basis @ G_products[i, j, :]
     return second_moment
-
-
-# if __name__ == '__main__':
-#     test = monomial_basis_numba(y=0.9,X=np.array([0.5,0.25,0.1]),poly_deg=2)
-#     test2,index = monomial_basis(y=0.9,X=np.array([0.5,0.25,0.1]),poly_deg=2)
-
-#     stopper = 1

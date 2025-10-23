@@ -30,6 +30,8 @@ t_start = 1
 T_option = t_start + 5
 strike_spreads = np.array([250,300,350]) / 10000
 n_poly = np.array([1,5,30])
+
+
 save_path = f"./Exploratory/"   # <--- change to your path
 
 # Get time zero stats. 

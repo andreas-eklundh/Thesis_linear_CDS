@@ -56,6 +56,68 @@ class DeterministicGamma:
                 break
         return Gamma
 
+    # def gamma_fun(self, params, u, t_mats):
+    #     """Piecewise *linear* hazard lambda(u)."""
+    #     t_mats = np.asarray(t_mats)
+    #     params = np.asarray(params)
+
+    #     if u <= t_mats[0]:
+    #         return params[0]              # Flat extrapolation before first knot
+    #     if u >= t_mats[-1]:
+    #         return params[-1]             # Flat extrapolation after last knot
+
+    #     idx = np.searchsorted(t_mats, u, side='right') - 1
+    #     t0, t1 = t_mats[idx], t_mats[idx+1]
+    #     if t_mats[idx+1] == t_mats[-1]: # endpoint fix.
+    #         lam0, lam1 = params[idx], 0
+    #     else:
+    #         lam0, lam1 = params[idx], params[idx+1]
+
+    #     # Linear interpolation
+    #     w = (u - t0) / (t1 - t0)
+    #     return lam0 + w * (lam1 - lam0)
+
+
+
+    # def Gamma_fun(self, params, u, t_mats):
+    #     """
+    #     Cumulative hazard Γ(u) for piecewise-linear λ(u).
+    #     params length == len(t_mats)
+    #     """
+    #     t_mats = np.asarray(t_mats)
+    #     params = np.asarray(params)
+    #     Gamma = 0.0
+    #     n = len(t_mats)
+
+    #     if u <= t_mats[0]:
+    #         return 0.0
+
+    #     for j in range(n - 1):
+    #         t0, t1 = t_mats[j], t_mats[j + 1]
+    #         lam0 = params[j]
+    #         # for the last valid interval, use flat extrapolation beyond the grid
+    #         lam1 = params[j + 1] if j + 1 < len(params) else params[-1]
+
+    #         if u <= t0:
+    #             break
+
+    #         du = min(u, t1) - t0
+    #         slope = (lam1 - lam0) / (t1 - t0)
+    #         # integrate λ(s) = lam0 + slope*(s - t0)
+    #         Gamma += du * lam0 + 0.5 * du**2 * slope
+
+    #         if u <= t1:
+    #             break
+
+    #     # if u is beyond the last grid, linearly extrapolate (flat hazard)
+    #     if u > t_mats[-1]:
+    #         lam_last = params[-1]
+    #         du = u - t_mats[-1]
+    #         Gamma += du * lam_last
+
+    #     return Gamma
+
+
     def get_CDS_deterministic(self, t, t0, t_M, params, t_grid_payments, t_mats):
         t_grid = np.asarray(t_grid_payments)
         # DISCRETE PREMIUM LEG (coupon dates)
@@ -380,28 +442,28 @@ if __name__ == "__main__":
     
     # To have some grid to plot.
     plot_grid = np.array([i *0.1 for i in range(int(np.max(mat_grid)/0.1)+ 1)])    
-    # Gamma, survival = np.zeros((CDS_obs.shape[0], plot_grid.shape[0])),np.zeros((CDS_obs.shape[0], plot_grid.shape[0]))
-    # cali_params = np.zeros((CDS_obs.shape[0], mat_grid.shape[0]))
-    # for t_idx in range(CDS_obs.shape[0]):
-    #     # Generate necessary values:        
-    #     # Calibrate back hazard rates
-    #     t_grid_payments = np.array([tenor*i for i in range(int(np.max(mat_grid)/tenor)+1)])   
+    Gamma, survival = np.zeros((CDS_obs.shape[0], plot_grid.shape[0])),np.zeros((CDS_obs.shape[0], plot_grid.shape[0]))
+    cali_params = np.zeros((CDS_obs.shape[0], mat_grid.shape[0]))
+    for t_idx in range(CDS_obs.shape[0]):
+        # Generate necessary values:        
+        # Calibrate back hazard rates
+        t_grid_payments = np.array([tenor*i for i in range(int(np.max(mat_grid)/tenor)+1)])   
         
-    #     cali_params[t_idx, : ] = model.calibrate_deterministic(CDS_obs[t_idx,:] , mat_grid, 0.0, t_grid_payments)
-    #     # Generate the survial probabilities/survival process
-    #     for i in range(plot_grid.shape[0]):
-    #         Gamma[t_idx,i] = model.Gamma_fun(cali_params[t_idx, : ] ,plot_grid[i],t_mats)
-    #         survival[t_idx,i] = np.exp(-Gamma[t_idx,i] )
+        cali_params[t_idx, : ] = model.calibrate_deterministic(CDS_obs[t_idx,:] , mat_grid, 0.0, t_grid_payments)
+        # Generate the survial probabilities/survival process
+        for i in range(plot_grid.shape[0]):
+            Gamma[t_idx,i] = model.Gamma_fun(cali_params[t_idx, : ] ,plot_grid[i],t_mats)
+            survival[t_idx,i] = np.exp(-Gamma[t_idx,i] )
             
-    #     print(f'Done with date {t_idx+1} out of {CDS_obs.shape[0]}')
+        print(f'Done with date {t_idx+1} out of {CDS_obs.shape[0]}')
 
-    # # First save processes for use in later stuff.
-    # np.savez(os.path.join(save_path, f"CDS_TS_plot.npz"),
-    #      t_mats_plots = plot_grid,
-    #      survival=survival,
-    #      Gamma = Gamma,
-    #      default_prob = 1- survival,
-    #      gamma_hist = cali_params)
+    # First save processes for use in later stuff.
+    np.savez(os.path.join(save_path, f"CDS_TS_plot.npz"),
+         t_mats_plots = plot_grid,
+         survival=survival,
+         Gamma = Gamma,
+         default_prob = 1- survival,
+         gamma_hist = cali_params)
     
     data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/CDS_TS_plot.npz")
     t_mats_plots = data['t_mats_plots']

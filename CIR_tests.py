@@ -35,7 +35,7 @@ if __name__ == '__main__':
     t = np.array(test_df['Years']) # t of the CDS.
     CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']])
     # Read in inferred survival probs.
-    data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/CDS_TS_plot.npz")
+    data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/DANBNK/Data_DANBNK.npz")
     t_mats_plots = data['t_mats_plots']
     survival=data['survival']
     Gamma = data['Gamma']
@@ -56,15 +56,14 @@ if __name__ == '__main__':
 
 
     # Negative process. Multiply by -1 everywhere. Let A and a get these too. 
-    params, Xn,Zn,Pn = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=1000)
+    params, Xn,Zn,Pn = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=2000)
 
     # Ttry with several restarts. 
     # params, Xn,Zn,Pn = cir.run_n_kalman(t,t_mat_grid,Y=Gamma_kalman,base_seed=206,n_restarts=5)
 
     # Set new optimal parameters too.
     cir.set_params(params)
-    # default_prob_model= np.exp(Zn)
-
+    # default_prob_model= np.exp(-Zn)
     # Save values:
 
     # With Params in place, we can utilize CIR class to do pricing, simulations etc. 
@@ -149,6 +148,38 @@ if __name__ == '__main__':
 
     fig.tight_layout()
     fig.savefig(os.path.join(save_path, f"CIR_survival.png"), dpi=150)
+    plt.close(fig)
+
+
+    default_prob_kalman = 1-np.exp(-Zn)
+    default_prob_kalman_apprx = Zn
+    # Actual/observed
+
+    # Define colors for maturities
+    colors = plt.cm.viridis_r(np.linspace(0, 1, len(mat_grid)))  # Colormap for maturities
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    for i, mat in enumerate(mat_grid):
+        color = colors[i]  # same color for this maturity
+        
+        # Kalman estimate
+        ax.plot(t, default_prob_kalman[:, i], linestyle="--", color=color, label=f"Kalman, {mat}Y")
+        
+        # Kalman approximation
+        # ax.plot(t, default_prob_kalman_apprx[:, i], linestyle="-", color=color, alpha=0.7, label=f"Kalman apprx, {mat}Y")
+        
+        # Actual
+        ax.plot(t, default_prob[:,np.isin(t_mats_plots, mat_grid).flatten()][:, i], 
+                marker="o", linestyle="", color=color, alpha=0.5,markersize=1, label=f"Actual, {mat}Y")
+
+    ax.set_xlabel("Time (years)")
+    ax.set_ylabel("Default Probability")
+    ax.set_title("Default Probabilities by Maturity and Method")
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')  # place legend outside
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_path, "CIR_Default_prob.png"), dpi=150)
     plt.close(fig)
 
 

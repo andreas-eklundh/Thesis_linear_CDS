@@ -103,13 +103,16 @@ def coupon_integrand(u, params, t, lambda_t, r, X_dim):
     L = laplace_transform(params, lambda_t, np.zeros(X_dim), tau, X_dim)
     return np.exp(-r * tau) * L
 
+@njit
+def _get_default_grid( u, t_grid):
+    return u - t_grid
 
 @njit
 def accrual_integrand(u, params, t, lambda_t, r, X_dim):
     tau = u - t
     alpha_x, beta_x = cir_derivatives(params, np.zeros(X_dim), tau, X_dim)
     L = laplace_transform(params, lambda_t, np.zeros(X_dim), tau, X_dim)
-    return np.exp(-r * tau) * (alpha_x + np.dot(beta_x, lambda_t)) * L
+    return np.exp(-r * tau) * (alpha_x + np.dot(beta_x, lambda_t)) * L *(_get_default_grid(u,t))
 
 
 @njit
@@ -125,22 +128,21 @@ def protection_integrand(u, params, t, lambda_t, r, delta, X_dim):
 # --------------------------------------------------------------------
 @njit
 def calc_coupon_leg(params, t, t_mat, lambda_t, r, tenor, X_dim):
-    t_grid_len = int(np.round(np.round(t_mat - t) / tenor)) + 1
-    n_steps = max(1, t_grid_len)
+    n_steps = 50
     return trapezoidal_rule(coupon_integrand, t, t_mat, n_steps, params, t, lambda_t, r, X_dim)
 
 
 @njit
 def calc_accrual_leg(params, t, t_mat, lambda_t, r, tenor, X_dim):
-    t_grid_len = int(np.round(np.round(t_mat - t) / tenor)) + 1
-    n_steps = max(1, t_grid_len)
+    n_steps = 50
+
     return trapezoidal_rule(accrual_integrand, t, t_mat, n_steps, params, t, lambda_t, r, X_dim)
 
 
 @njit
 def calc_protection_leg(params, t, t_mat, lambda_t, r, delta, tenor, X_dim):
-    t_grid_len = int(np.round(np.round(t_mat - t) / tenor)) + 1
-    n_steps = max(1, t_grid_len)
+    n_steps = 50
+
     return trapezoidal_rule(protection_integrand, t, t_mat, n_steps, params, t, lambda_t, r, delta, X_dim)
 
 
