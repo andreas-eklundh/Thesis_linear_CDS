@@ -52,7 +52,7 @@ def frobenius_norm(mat):
     return np.sqrt(s)
 
 @njit
-def mat_exp_approx(A, dt, tol=1e-7):
+def mat_exp_approx(A, dt, tol=1e-9):
     n = A.shape[0]
     I = np.eye(n)
     Adt = A * dt
@@ -61,7 +61,7 @@ def mat_exp_approx(A, dt, tol=1e-7):
     term = I.copy()
 
     # We use a fixed upper limit to prevent infinite loops in cases of non-convergence
-    limit = 50 # should be more than sufficient.
+    limit = 70 # should be more than sufficient.
 
     for i in range(1, limit + 1):
         # Calculate the next term
@@ -280,21 +280,31 @@ def cds_value(lhc, t,t0, t_mat_grid,CDS_grid):
     return result
 
 
+
+
 # standard kalman with previous in denom.
 @njit
 def update_step_cds(X_pred, P_pred, h,h_p, R_k, t_obs,t0, t_mats, lhc, CDS_k):
     pred_Xn = np.append([1],X_pred) # Add one for computations of cds spread and derivative
+    # Convert to contingous arrays in case.
+    P_pred = np.ascontiguousarray(P_pred)
+        
     # Step 3: Mean prediction, covariance, Kalman Gain etc.
     mu_k = h(lhc, pred_Xn, t_obs,t0, t_mats)
 
     H_x = h_p(lhc, pred_Xn, t_obs,t0, t_mats)
+    H_x = np.ascontiguousarray(H_x)
+
     # covariance
     S_k = H_x @ P_pred @ H_x.T + R_k
-    det_S = np.linalg.det(S_k)
-    if  (np.isnan(det_S)) | (np.abs(det_S) < 1e-12 ):
-        S_k_inv = np.linalg.pinv(S_k)
-    else:
-        S_k_inv = np.linalg.inv(S_k)
+    S_k = np.ascontiguousarray(S_k)
+
+    # det_S = np.linalg.det(S_k)
+    # if  (np.isnan(det_S)) | (np.abs(det_S) < 1e-12 ):
+    #     S_k_inv = np.linalg.pinv(S_k)
+    # else:
+    S_k_inv = np.linalg.inv(S_k)
+    S_k_inv = np.ascontiguousarray(S_k_inv)
 
     # Step 4: Compute Kalman Gain, filtered mean state, covariance.
     K_k = P_pred @ H_x.T @ S_k_inv
@@ -302,7 +312,7 @@ def update_step_cds(X_pred, P_pred, h,h_p, R_k, t_obs,t0, t_mats, lhc, CDS_k):
     m_k = X_pred + K_k @ vn
     P_k = P_pred - K_k @ S_k @ K_k.T
 
-    return mu_k, vn,S_k, m_k, P_k
+    return vn,S_k, m_k, P_k, S_k_inv
 
 
 @njit
@@ -372,8 +382,6 @@ def drift_deriv_term(Xn, lhc_p, Delta):
                     id_mat, r, m, Y_dim,
                     delta, tenor) = lhc_p
     x = Xn.reshape(-1)
-
-    # NOTE: Parametrization. Need to use gamma^p=-gamma
     g = - gamma.flatten()   # ensure 1D
     n = x.size
 
@@ -403,6 +411,7 @@ def get_states(lhc, t_obs, T_M_grid, CDS_obs,X0):
     X = np.ones((m, n_obs))
     Y = np.ones((n_obs)) # Implicitly sets Y0
     # Time 0 values
+    # Todo: Rewrite this to start off at mu. then transform.
     X[:, 0] = X0
     # Previous Z, starting guess
     Z = np.ones((m,n_obs))
@@ -485,15 +494,15 @@ def _get_ukf_params(L, alpha, beta, kappa):
     Generates the weights and scaling parameters for the UKF.
     """
     lambda_ = alpha**2 * (L + kappa) - L
-    
+
     # Weights for mean
     Wm = np.full(2 * L + 1, 1.0 / (2.0 * (L + lambda_)))
     Wm[0] = lambda_ / (L + lambda_)
-    
+
     # Weights for covariance
     Wc = np.full(2 * L + 1, 1.0 / (2.0 * (L + lambda_)))
     Wc[0] = lambda_ / (L + lambda_) + (1.0 - alpha**2 + beta)
-    
+
     return Wm, Wc, lambda_
 
 @njit
@@ -502,16 +511,16 @@ def _generate_sigma_points(x, P, L, lambda_):
     Generates the 2L+1 sigma points.
     """
     sigma_points = np.zeros((2 * L + 1, L))
-    
+
     # Calculate matrix square root of (L + lambda) * P
     # Use user's provided matrix_sqrt for SPD matrices
     P_sqrt = matrix_sqrt((L + lambda_) * P)
-    
+
     sigma_points[0, :] = x
     for i in range(L):
         sigma_points[i + 1, :] = x + P_sqrt[:, i]
         sigma_points[i + L + 1, :] = x - P_sqrt[:, i]
-        
+
     return sigma_points
 
 # --- UKF Main Functions ---
@@ -520,7 +529,7 @@ def _generate_sigma_points(x, P, L, lambda_):
 def ukf_predict_step(m_k, P_k, lhc_p, Delta, Sigma, drift_func):
     """
     Performs the UKF Prediction (Process) step.
-    
+
     Args:
         m_k: Updated state mean from step k (size L)
         P_k: Updated state covariance from step k (size L, L)
@@ -536,59 +545,59 @@ def ukf_predict_step(m_k, P_k, lhc_p, Delta, Sigma, drift_func):
     L = m_k.shape[0]
 
 
-# --- UKF Parameters (Standard defaults) ---
+    # --- UKF Parameters (Standard defaults) ---
     # These can be tuned, but these values are standard.
-    UKF_ALPHA = 1e-2
+    UKF_ALPHA = 0.06
     UKF_BETA = 2.0
     UKF_KAPPA =  3.0 - L # (where L is state dim) is also common
     Wm, Wc, lambda_ = _get_ukf_params(L, UKF_ALPHA, UKF_BETA, UKF_KAPPA)
-    
+
     # 1. Generate sigma points from updated state P_k
     sigma_points = _generate_sigma_points(m_k, P_k, L, lambda_)
-    
+
     # 2. Propagate sigma points through the non-linear drift function
     propagated_points = np.zeros((2 * L + 1, L))
     for i in range(2 * L + 1):
         propagated_points[i, :] = drift_func(sigma_points[i, :], lhc_p, Delta)
-        
+
     # 3. Calculate predicted mean
     X_pred_next = np.zeros(L)
     for i in range(2 * L + 1):
         X_pred_next += Wm[i] * propagated_points[i, :]
-        
+
     # 4. Calculate predicted covariance from propagated points
     P_pred_next = np.zeros((L, L))
     for i in range(2 * L + 1):
         diff = propagated_points[i, :] - X_pred_next
         P_pred_next += Wc[i] * np.outer(diff, diff)
-        
+
     # 5. Calculate and add state-dependent process noise Q_k
     # Q_k is based on the *updated* mean from step k (m_k),
     # matching the logic in your EKF.
     P_state = np.zeros(L)
     for i in range(L):
         P_state[i] = m_k[i] * (1.0 - m_k[i])
-    
+
     # Ensure P_state is non-negative for sqrt
     P_state_sqrt = np.sqrt(np.maximum(P_state, 0.0))
-    
+
     # Sigma is (Y_dim + m, m), we need the (m, m) part [1:, :]
-    Sigma_Z = Sigma[1:, :] 
+    Sigma_Z = Sigma[1:, :]
     Sigma_prod = (Sigma_Z @ np.diag(P_state_sqrt)) @ (Sigma_Z @ np.diag(P_state_sqrt)).T
     Q_k = Sigma_prod * Delta
-    
+
     P_pred_next += Q_k
-    
+
     return X_pred_next, P_pred_next
 
 @njit
 def ukf_update_step(X_pred, P_pred, h, h_p_ignored, R_k, t_obs, t0, t_mats, lhc, CDS_k):
     """
     Performs the UKF Update (Measurement) step.
-    
+
     Signature is kept identical to your EKF's `update_step_cds` for
     "plug-and-play" compatibility. `h_p_ignored` is not used.
-    
+
     Args:
         X_pred: Predicted state mean from prediction step (size L)
         P_pred: Predicted state covariance (size L, L)
@@ -608,14 +617,14 @@ def ukf_update_step(X_pred, P_pred, h, h_p_ignored, R_k, t_obs, t0, t_mats, lhc,
     n_mat = R_k.shape[0] # Measurement dimension
     # --- UKF Parameters (Standard defaults) ---
     # These can be tuned, but these values are standard.
-    UKF_ALPHA = 1e-2
+    UKF_ALPHA = 1e-1
     UKF_BETA = 2.0
     UKF_KAPPA = 3.0 - L # (where L is state dim) is also common
     Wm, Wc, lambda_ = _get_ukf_params(L, UKF_ALPHA, UKF_BETA, UKF_KAPPA)
 
     # 1. Generate sigma points from *predicted* state
     sigma_points_X = _generate_sigma_points(X_pred, P_pred, L, lambda_)
-    
+
     # 2. Propagate sigma points through non-linear measurement function `h`
     # We must augment the state: [1.0] + Z_t
     propagated_points_Y = np.zeros((2 * L + 1, n_mat))
@@ -624,30 +633,30 @@ def ukf_update_step(X_pred, P_pred, h, h_p_ignored, R_k, t_obs, t0, t_mats, lhc,
         chi_aug = np.zeros(L + 1)
         chi_aug[0] = 1.0
         chi_aug[1:] = sigma_points_X[i, :]
-        
+
         # Pass augmented state to `cds_fun`
         propagated_points_Y[i, :] = h(lhc, chi_aug, t_obs, t0, t_mats)
-        
+
     # 3. Calculate predicted measurement mean (mu_k)
     mu_k = np.zeros(n_mat)
     for i in range(2 * L + 1):
         mu_k += Wm[i] * propagated_points_Y[i, :]
-        
+
     # 4. Calculate innovation covariance (S_k)
     S_k = np.zeros((n_mat, n_mat))
     for i in range(2 * L + 1):
         diff_y = propagated_points_Y[i, :] - mu_k
         S_k += Wc[i] * np.outer(diff_y, diff_y)
-    
+
     S_k += R_k
-    
+
     # 5. Calculate cross-covariance (P_xy)
     P_xy = np.zeros((L, n_mat))
     for i in range(2 * L + 1):
         diff_x = sigma_points_X[i, :] - X_pred
         diff_y = propagated_points_Y[i, :] - mu_k
         P_xy += Wc[i] * np.outer(diff_x, diff_y)
-        
+
     # 6. Calculate Kalman Gain (K_k)
     # Use same robust inversion as your EKF
     det_S = np.linalg.det(S_k)
@@ -655,15 +664,15 @@ def ukf_update_step(X_pred, P_pred, h, h_p_ignored, R_k, t_obs, t0, t_mats, lhc,
         S_k_inv = np.linalg.pinv(S_k)
     else:
         S_k_inv = np.linalg.inv(S_k)
-        
+
     K_k = P_xy @ S_k_inv
-    
+
     # 7. Calculate updated state (m_k) and covariance (P_k)
     vn = CDS_k - mu_k # Innovation
     m_k = X_pred + K_k @ vn
     P_k = P_pred - K_k @ S_k @ K_k.T
-    
-    return mu_k, vn, S_k, m_k, P_k
+
+    return  vn, S_k, m_k, P_k,S_k_inv
 
 #######
 # Define f(mu1)
@@ -759,7 +768,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     # Initial Predictions of means and cov
     # Only criteria on mu1 - mu1 < k/kappa. Set to theta
     mu1 = solve_mu1(kappa_p, theta_p, gamma1)
-    mu = compute_stationary(kappa_p,theta_p,m,gamma1,mu1= mu1)
+    mu = compute_stationary(kappa_p,theta_p,m,gamma1,mu1 = mu1)
     # Bound mu jus in case.
     mu = np.clip(mu,0,1)
     pred_Xn = mu #drift_term(mu,lhc_p,Delta) #mu
@@ -768,59 +777,47 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     # Initial Cov Prediction.Z0
     Sigma_sqrt = np.ascontiguousarray(Sigma @ np.diag(np.sqrt(P_state)))
     Sigma_prod = Sigma_sqrt @ Sigma_sqrt.T
-    # Sigma_prod = (Sigma @ np.diag(np.sqrt(P_state))) @ (Sigma @ np.diag(np.sqrt(P_state))).T
     # Just an attemt, not to keep.
     P0 = Sigma_prod.copy()
-    pred_Pn = P0[1:,1:]
-
+    pred_Pn = P0[1:,1:] # The above is actually the shape of Y,X of legacy reasons.
     # Run algo.
     for n in range(0,n_obs):
         # Extended kalman filter.
-        _, vn,S_k, Xn[n,:], Pn[n,:,:] = update_step_cds(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
+        vn,S_k, Xn[n,:], Pn[n,:,:],S_k_inv = update_step_cds(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
                                                             t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
         # Unscented Kalman
-        # _, vn,S_k, Xn[n,:], Pn[n,:,:] = ukf_update_step(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
+        # vn,S_k, Xn[n,:], Pn[n,:,:],S_k_inv = ukf_update_step(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
         #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
-       
-        ## Try some penalty method.
-        penalty = 0.0
+
 
         # ---- 1. state constraint penalty ----
         if np.any(Xn[n, :] < 0) or np.any(Xn[n, :] > 1):
             # clip inside support with small epsilon
             Xn[n, :] = np.clip(Xn[n, :], 1e-8, 1 - 1e-8)
-            penalty += 1e3 * np.sum((Xn[n, :] < 0) | (Xn[n, :] > 1))  # soft penalty
+            # penalty += 1e3 * np.sum((Xn[n, :] < 0) | (Xn[n, :] > 1))  # soft penalty
 
-        # Compute Zn too
-        Xn_extended = np.append([1],Xn[n,:])
-        Zn[n,:] =  cds_fun(lhc_q,Xn_extended,t_obs[n],t0[n],T_M_grid[:,n])
-        
+        # Compute Zn too - clearly do outside filter.
+        # Xn_extended = np.append([1],Xn[n,:])
+        # Zn[n,:] =  cds_fun(lhc_q,Xn_extended,t_obs[n],t0[n],T_M_grid[:,n])
+
 
         # ---- 2. innovation covariance stability ----
         det_S = np.linalg.det(S_k)
-        if det_S <= 0 or np.isnan(det_S):
-            # regularize slightly instead of aborting
-            S_k = S_k + np.eye(S_k.shape[0]) * 1e-8
-            det_S = np.linalg.det(S_k)
-            penalty += 1e3  # soft penalty
 
         # ---- 3. safe inverse / logdet ----
         sign, logdet = np.linalg.slogdet(S_k)
         if sign <= 0:
             logdet = np.log(np.abs(det_S) + 1e-12)
-            penalty += 1e3
-
-        S_inv = np.linalg.pinv(S_k)  # pseudo-inverse is fine here
 
         # ---- 4. likelihood contribution ----
         ll_step = -0.5 * (
             S_k.shape[0] * np.log(2 * np.pi)
             + logdet
-            + vn.T @ S_inv @ vn
+            + vn.T @ S_k_inv @ vn
         )
 
-        log_likelihood += ll_step # - penalty
-        
+        log_likelihood += ll_step #- penalty
+
 
         if (n < n_obs - 1): # Not sensible to predict further.
             Delta = t_obs[n+1] - t_obs[n] # Only apprx for now. Move to loop maybe.
@@ -834,13 +831,15 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
             # Then update the predictions:
             # Taylor approximate the transition.
             # Pure Euler
-            pred_Xn = drift_term(Xn[n,:],lhc_p,Delta)
+            Xn_n =  np.ascontiguousarray(Xn[n,:])
+            pred_Xn = drift_term(Xn_n,lhc_p,Delta)
             # Taylor
-            P_cov = drift_deriv_term(Xn[n,:],lhc_p,Delta)
-            pred_Pn =  P_cov @ Pn[n,:,:] @ P_cov.T + Q_k
+            P_cov = drift_deriv_term(Xn_n,lhc_p,Delta)
+            Pn_n = np.ascontiguousarray(Pn[n,:,:])
+            pred_Pn =  P_cov @ Pn_n @ P_cov.T + Q_k
 
             ## Unscented Kalam prediciton.
-            # pred_Xn, pred_Pn = ukf_predict_step(Xn[n,:],Pn[n,:,:],lhc_p,Delta,Q_k,drift_term)
+            # pred_Xn, pred_Pn = ukf_predict_step(Xn_n,Pn_n,lhc_p,Delta,Sigma,drift_term)
 
 
     return - log_likelihood, Xn, Zn, Pn
@@ -855,7 +854,7 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
     kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
     kappa_p = kappa - lambda_i
     theta_p = (kappa*theta) / kappa_p
-    theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]    
+    theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
     lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
     lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
 
@@ -872,7 +871,7 @@ def nonlinear_constraints( params, m):
     """
     m = int(m)
     # expected number of constraints: g1, g2 and 2*m for g3,g4 converted -> total 2 + 2*m
-    params = np.asarray(params, dtype=float)
+    params_p = np.asarray(params, dtype=float)
 
     params_p = params[2*m+1:]
     params_q = params[:2*m+1]
@@ -898,8 +897,9 @@ def nonlinear_constraints( params, m):
 
     # g3 <= 0 -> -g3 >= 0
     for i in range(m):
+        # Constraint for process m with Y_t
         if i == m-1:
-            g3 = gamma1 - kappa[i] + kappa[i] * theta[i] 
+            g3 = gamma1 - kappa[i] + kappa[i] * theta[i] + 0.5 * (sigma[i]**2)
         else:
             g3 = gamma1 - kappa[i] + kappa[i] * theta[i] + 0.5 * (sigma[i] ** 2)
         cons.append(-g3)
@@ -908,22 +908,10 @@ def nonlinear_constraints( params, m):
     # g3 <= 0 -> -g3 >= 0
     for i in range(m):
         if i == m-1 :
-            g3 = gamma1 - kappa_p[i] + (kappa_p[i] * theta_p[i]) 
+            g3 = gamma1 - kappa_p[i] + (kappa_p[i] * theta_p[i]) + 0.5 * (sigma[i]**2)
         else:
             g3 = gamma1 - kappa_p[i] + (kappa_p[i] * theta_p[i]) + 0.5 * (sigma[i]**2)
         cons.append(-g3)
-     
-
-    ### Additional constraints:
-    # Positivity and hypercube bounds
-    # for i in range(m):
-    #     cons.append(kappa[i])          # >= 0
-    #     cons.append(theta[i])          # >= 0
-    #     cons.append(1.0 - theta[i])    # theta <= 1
-    #     cons.append(sigma[i])          # >= 0
-    #     cons.append(kappa_p[i])        # >= 0
-    #     cons.append(theta_p[i])        # >= 0
-    #     cons.append(1.0 - theta_p[i])  # theta_p <= 1
 
 
     cons = np.asarray(cons, dtype=float)
@@ -948,11 +936,15 @@ class LHC_single():
         self.X0 = X0
         self.a = np.ones((self.Y_dim,1))                                      # Y dim is 1 for LHC
         # Set inital values. Need to comply with (38)
-        self.gamma1 = rng.uniform(0.01, 0.6, size=(Y_dim,))       # gamma1 strictly pos.
-        self.kappa = rng.uniform(self.gamma1, 1.1, size=(X_dim,))       # Kappa given
-        # self.gamma1 = rng.uniform(0.05, 0.3, size=(Y_dim,))       # gamma1 strictly pos.
 
-        self.theta = rng.uniform(0.01, 1-self.gamma1/self.kappa, size=(X_dim,))       # Theta coeffs
+        ### Theta needs to be in (0,1)
+        self.theta = rng.uniform(0.00, 1, size=(X_dim,))       # Theta coeffs
+        # Based on that, select kappa freely.
+        self.kappa = rng.uniform(0, 1, size=(X_dim,))       # Kappa given
+
+        # Then gamma has a constraint. But hold for every combination.
+        self.gamma1 = rng.uniform(0,np.min(self.kappa*(1-self.theta)), size=(Y_dim,))       # gamma1 strictly pos.
+
         # Build b, beta, A, gamma
         self.rebuild_dynamics()                                     # Build b,beta,gamma again.
 
@@ -1232,18 +1224,16 @@ class LHC_single():
 
             # Set inital values. Need to comply with (38). enhanced from thm if used in constr
             lambda_i = np.zeros(X_dim)
-            lambda_i[0] = rng.uniform(-1, (self.kappa[0] - self.theta[0]*self.kappa[0] -
-                                                self.gamma1),size=(1,)) # initialise gamma to comply.
-                    # not too sure of lower bounds here...
             for i in range(self.m):
-                if i < self.m-1:
-                    lambda_i[i] = rng.uniform(-1, 
-                                        (self.kappa[i] - self.theta[i]*self.kappa[i] -
-                                            self.gamma1),size=(1,)) # initialise gamma to comply.
-                else: 
-                    lambda_i[i] =  rng.uniform(-self.kappa[i]*self.theta[i], 
+                if i == self.m - 1:
+                    lambda_i[i] =  rng.uniform(-self.kappa[i]*self.theta[i],
                                         0.5*(self.kappa[i] - self.kappa[i]*self.theta[i] -
-                                            self.gamma1),size=(1,))            
+                                            self.gamma1),size=(1,))
+                else:
+                    lambda_i[i] = rng.uniform(-1,
+                                            (self.kappa[i] - self.theta[i]*self.kappa[i] -
+                                            self.gamma1),size=(1,)) # initialise gamma to comply.
+
             # Try lambda to zero.
             kappa_p =  self.kappa - lambda_i  #rng.uniform(gamma1, 0.99, size=(X_dim,))       # Kappa given
             theta_p = (self.kappa*self.theta) / kappa_p
@@ -1260,12 +1250,10 @@ class LHC_single():
             sigma_i = np.zeros(self.m)
             for i in range(0,self.m):
                 # not too sure of lower bounds here...
-                if i < self.m-1:
+                if i == self.m-1:
+                    sigma_i[i] = rng.uniform(0.01, np.minimum(sigma_thetakap,sigma_upper[i]) , size=(1,))       # Kappa given
+                else:
                     sigma_i[i] = rng.uniform(0,sigma_upper[i],size=(1,)) # initialise gamma to comply.
-                else: 
-                    sigma_i[i] = rng.uniform(0.01, sigma_thetakap , size=(1,))       # Kappa given
-            # sigma_i = rng.uniform(0.01, 0.15 , size=(X_dim,))       # Kappa given
-
 
             # Sigma error is likely smalll.
             sigma_err = rng.uniform(0.001, 0.01, size=(Y_dim,))       # Kappa given
@@ -1329,19 +1317,12 @@ class LHC_single():
                     id_mat, r, m, Y_dim,
                     delta, tenor)=lhc_p
         t0 = t_obs
-        # bounds = (
-        #         [(1e-6, 1)] * m +     # kappa
-        #         [(1e-6, 1)] * m +     # theta
-        #         [(0.001,1)] +        # gamma1
-        #         [(0, 0)]  *m  +         # lambda_p
-        #         [(1e-6, 1)] * m +     # sigma
-        #         [(1e-6, 0.5)]         # sigma_err
-        #     )
         if self.m == 1:
             bounds = (
                 [(1e-6, 1)] * m +     # kappa
                 [(1e-6, 1)] * m +     # theta
-                [(0.001,1)] +        # gamma1
+                # [(0.001,1)] +        # gamma1
+                [(0.23877688,0.23877688)]+ 
                 [(-1, 1)]    +         # lambda_p
                 [(1e-6, 1)] * m +     # sigma
                 [(1e-6, 0.5)]         # sigma_err
@@ -1356,30 +1337,28 @@ class LHC_single():
                 [(1e-6, 1)] * m +     # sigma
                 [(1e-6, 0.5)]         # sigma_err
             )
-
         nlc = NonlinearConstraint(lambda x: nonlinear_constraints(x,self.m), 0, np.inf)
-
         # Global optimizer: few iters. Do on supsed only.
+        rng = np.random.default_rng(base_seed)
+
         result = differential_evolution(
             func= kalman_wrapper,
-            x0=x0,
+            # x0=x0, # Maybe initial value is wrong here?
             bounds=bounds,
             constraints=(nlc,),
             args=(t_obs, t0, T_M_grid, CDS_obs,
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
-            # strategy='best1bin',
-            # popsize=7,         # larger popsize -> more exploration
-            # maxiter=400,       # allow many generations
-            # tol=1e-5,            # looser tolerance
-            popsize=7,         # larger popsize -> more exploration
-            maxiter=200,       # allow many generations          
-            tol=1e-4,            # looser tolerance
+            strategy='best1exp',
+            popsize=5 * len(bounds),
+            mutation=(0.7, 1.0),
+            recombination=0.9,
+            maxiter=150,
             # workers=1,
             # updating='immediate',
             workers=-1,
             updating='deferred',
             polish=False,
-            seed=base_seed
+            seed= np.random.RandomState(base_seed) #  Use rng for reproducability. 
         )
 
         # If DE failed or hit constraint penalties, bail early
@@ -1390,10 +1369,11 @@ class LHC_single():
         # That is based on previous optimal, i can add  bounds.
         # polish_result = minimize(
         #     fun=kalman_wrapper,
-        #     x0=polish_result.x,  # <-- Use DE's best solution as the start
+        #     x0=result.x,  # <-- Use DE's best solution as the start
         #     args=(t_obs, t0, T_M_grid, CDS_obs,
         #           self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
-        #     method='COBYLA',
+        #     method='trust-constr',
+        #     bounds = bounds,
         #     constraints=(nlc,), # <-- Pass the same nonlinear constraints
         #     options={
         #         'disp': True,
@@ -1417,7 +1397,7 @@ class LHC_single():
         if self.kalman_obj >= 1e12:
             return optim_params, 0, 0, 0
         else:
-            params_p = optim_params[2*m+1:]
+            params_p =  optim_params[2*m+1:]
             params_q = optim_params[:2*m+1]
             lambda_i = params_p[:m]
             kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
@@ -1426,7 +1406,7 @@ class LHC_single():
             theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
             lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
             lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
-
+            
             neg_log_lik, Xn, Zn, Pn = kalmanfilter_opt(optim_params, t_obs,t0,T_M_grid,CDS_obs,
                                                        lhc_p,lhc_q,self.X0)
             # Build structures in very end to take onwards.
@@ -1449,7 +1429,6 @@ class LHC_single():
             lhc_p = self.build_P_params(params=None, gamma1=None,rng=rng)
 
             # Set the error to be the Stddeviation of CDS_obs
-            #self.sigma_err = np.std(CDS_obs).flatten()
             # Flatten for scipy.
             x0_Q = self.flatten_params()
 
@@ -1552,7 +1531,7 @@ class LHC_single():
                 # Cap X process in 0,1 to avioid discretization error.
                 path_Q[i-1,1:] = np.clip(path_Q[i-1,1:],0,path_Q[i-1,0])
                 # Out
-                mu_t = A @ path_Q[i - 1,:]                
+                mu_t = A @ path_Q[i - 1,:]
                 # Create Sigma:
                 P_state = np.array(path_Q[i - 1,1:] * (path_Q[i-1,0] - path_Q[i-1,1:]))
                 Sigma_prod = (cov_trans @ np.diag(np.sqrt(P_state)))
@@ -1582,15 +1561,13 @@ class LHC_single():
 
         return T_return, path_Q
 
-    def simul_Z(self, chi0, T,M,n_mat,seed=None,scheme='Euler'):
+    def simul_Z(self, chi0, T,M,n_mat,seed=None,scheme='Euler', measure = 'Q'):
         delta = T / M
         T_return = np.array([0] + [delta*k for k in range(1,M+1)])
         path_Q = np.ones((M + 1, self.m))
-
         # Set initial value.
         path_Q[0,:] = chi0
         W_Q = norm.rvs(size = (M,self.m),random_state=seed) # simulate at beginning - faster!
-
         # Get A matrix. Add argument if timul under P or Q.
         params_Q = np.concatenate([self.kappa,self.theta,self.gamma1])
         # If params have been sat with meaningfull values
@@ -1599,17 +1576,21 @@ class LHC_single():
         params = np.concatenate([params_Q,params_P])
         # Set also P params.
         lhc_p = self.build_P_params(params_P,self.gamma1)
-        _,cov_trans,_ = build_matrices(lhc_p,self.sigma,self.sigma_err,n_mat)
+        A_p,cov_trans,_ = build_matrices(lhc_p,self.sigma,self.sigma_err,n_mat)
+
+        if measure == 'Q':
+            b, beta = self.b,self.beta
+        elif measure == 'P':
+            b, beta = A_p[self.Y_dim:, :self.Y_dim], A_p[self.Y_dim:,self.Y_dim:]
 
         self.rebuild_dynamics()
         if scheme == 'Euler':
             for i in range(1,M+1):
                 # Out
                 path_Q[i-1,:] = np.clip(path_Q[i-1,:],0,1)
-
                 diag_term =  np.identity(self.m)*(-self.gamma.flatten() @path_Q[i - 1,:])
-                mu_t = (self.b.flatten()+
-                        (self.beta + diag_term) @ path_Q[i - 1,:])
+                mu_t = (b.flatten()+
+                        (beta + diag_term) @ path_Q[i - 1,:])
                 # Create Sigma:
                 P_state = np.array(path_Q[i - 1,:] * (1 - path_Q[i-1,:]))
                 Sigma_prod = (cov_trans[1:,: ] @ np.diag(np.sqrt(P_state)))
@@ -1620,8 +1601,8 @@ class LHC_single():
                 path_Q[i-1,:] = np.clip(path_Q[i-1,:],0,1)
 
                 diag_term =  np.identity(self.m)*(-self.gamma.flatten() @path_Q[i - 1,:])
-                mu_t = (self.b.flatten()+
-                        (self.beta + diag_term) @ path_Q[i - 1,:])
+                mu_t = (b.flatten()+
+                        (beta + diag_term) @ path_Q[i - 1,:])
                 # Create Sigma:
                 P_state = np.array(path_Q[i - 1,:] * (1 - path_Q[i-1,:]))
                 Sigma_prod = (cov_trans[1:,: ] @ np.diag(np.sqrt(P_state)))
@@ -1657,7 +1638,9 @@ class LHC_single():
         prices_MC_hist = np.zeros(shape = (N,N_strikes))
         for i in range(N):
             # Get Latent states. Simulate to time of inception of CDS. Calculate only for 1 maturity.
-            T_return, X_Q = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed,scheme='Milstein')
+            # T_return, X_Q = self.simul_latent_states( chi0,t0,M,n_mat=1,seed=seed,scheme='Milstein')
+            T_return, X_Q = self.simul_Z( chi0,t0,M,n_mat=1,seed=seed,scheme='Milstein')
+            
             S = X_Q[:,0]
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
             # U = uniform.rvs(random_state=seed)
