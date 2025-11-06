@@ -44,26 +44,32 @@ class MultivariatePolynomialGenerator:
                 + 0.5 * sp.trace(self.Q * hess))
 
     def generator_matrix(self):
-        """Compute G such that L(H) = H * G"""
+        """Compute sparse generator matrix G such that L(H) = H * G"""
         N = len(self.basis)
-        G = sp.zeros(N)
+        basis_index = {b: i for i, b in enumerate(self.basis)}
+        data = {}  # {(i, j): coeff}
+
         for j, f in enumerate(self.basis):
             Lf = sp.expand(self.L(f))
             poly = sp.Poly(Lf, *self.z)
             for monom, c in poly.terms():
-                # Find the matching basis index
                 mon_expr = sp.Mul(*[z**p for z, p in zip(self.z, monom)])
-                i = self.basis.index(mon_expr)
-                G[i, j] = c
+                i = basis_index.get(mon_expr)
+                if i is not None and c != 0:
+                    data[(i, j)] = c
+
+        # convert to sparse SymPy matrix
+        G = sp.SparseMatrix(N, N, data)
         return G
 
 
+
     # Actually calculate. remainder has just been logic
-    def calculate_expected(self,z):
+    def calculate_expected(self,z,t_diff):
         E_val = np.zeros(self.var_dim)
         z_basis = self.basis_mat.subs(z).evalf()
         G_n = self.generator_matrix()
-        G_n_exp = expm(G_n)
+        G_n_exp = expm(G_n * t_diff)
         # Loop over indixes
         for i in range(1,(self.var_dim)+1):
             e_i = np.zeros(shape = z_basis.shape[0])
@@ -71,7 +77,7 @@ class MultivariatePolynomialGenerator:
             E_val[i-1] = z_basis.T @ G_n_exp @ e_i
         return E_val
     
-    def calculate_cov(self,z):
+    def calculate_cov(self,z,t_diff):
         # Contstruct cov matrix by outer prod of var 
         # NOTE. this is only first moments..
         second_moments = np.zeros(shape = (self.var_dim,self.var_dim))
@@ -80,7 +86,7 @@ class MultivariatePolynomialGenerator:
         # Get basis and generator.
         z_basis = self.basis_mat.subs(z).evalf()
         G_n = self.generator_matrix()
-        G_n_exp = expm(G_n)
+        G_n_exp = expm(G_n*t_diff)
         # Start index after first moments.
         idx_start = self.var_dim+1
         for i in range(0,self.var_dim):
@@ -93,7 +99,7 @@ class MultivariatePolynomialGenerator:
                 idx_start += 1
 
         # Get expected values.
-        E_val = self.calculate_expected(z)
+        E_val = self.calculate_expected(z,t_diff)
         
         E_square = np.outer(E_val, E_val)
 

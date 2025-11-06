@@ -288,8 +288,7 @@ if __name__ == "__main__":
     lhc.unflatten_params(final_paramLHCK[:2*X_dim+1])
     # Set also P params.
     gamma1 = np.array([final_paramLHCK[2*X_dim]])
-    theta=final_paramLHCK[X_dim:2*X_dim]
-    lhc_P = lhc.build_P_params(params=final_paramLHCK[2*X_dim+1:],theta=theta,gamma1=gamma1)
+    lhc_P = lhc.build_P_params(params=final_paramLHCK[2*X_dim+1:],gamma1=gamma1)
     # Then, we are ready to price in every dimension.
     # Strike grid. Base around forward spread
     # We consider this setup

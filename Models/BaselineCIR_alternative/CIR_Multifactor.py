@@ -4,6 +4,7 @@ from scipy.optimize import minimize, NonlinearConstraint, Bounds
 from numba import njit, float64, int64
 from Models.ATSMGeneral.ATSM import ATSM
 from Models.BaselineCIR_alternative.CIR_numba import calc_cds
+from Models.BaselineCIR_alternative.Gamma_solver import DeterministicGamma
 from scipy.stats import norm, ncx2, gamma, expon
 from scipy.integrate import quad
 from scipy.linalg import expm
@@ -33,28 +34,36 @@ class CIRIntensity():
             # Default (short/med) factors
             self.kappa = rng.uniform(0.2, 0.8, size=(X_dim,))
             self.theta = rng.uniform(0.01, 0.1, size=(X_dim,))
-            self.sigma = rng.uniform(0.01, np.sqrt(2*self.kappa*self.theta), size=(X_dim,))
 
-            # Force the last factor to be long-term (small kappa, larger theta)
-            long_idx = -1
-            self.kappa[long_idx] = rng.uniform(0.01, 0.12)      # slow mean reversion
-            self.theta[long_idx] = rng.uniform(0.05, 0.25)      # larger long-run mean
-            self.sigma[long_idx] = rng.uniform(0.001, np.sqrt(2*self.kappa[long_idx]*self.theta[long_idx]))
+            # Initiate MPR specification. Use positivity bound for positive.
+            self.lambda_i = np.zeros(X_dim) 
+            for i in range(X_dim):
+                self.lambda_i[i] = rng.uniform(-self.theta[i]*self.kappa[i], self.kappa[i], 1) 
+
             # initialise all positive.
-            self.kappa_p = self.kappa + 0.1 # just initialise these clsoe to each other
-            self.theta_p = self.theta + 0.01 # just initialise these clsoe to each other
-            self.sigma_err = np.random.uniform(0.001, 0.01, size=(1,))
+            self.kappa_p = self.kappa - self.lambda_i
+            self.theta_p = (self.theta *self.kappa + self.lambda_i ) / self.kappa_p
+
+            # Set sigma in feller grid.
+            # Sigma to be in minimum of feller conds.
+            feller_min = np.minimum(np.sqrt(2*self.kappa*self.theta),
+                                    np.sqrt(2*self.kappa_p*self.theta_p))
+            self.sigma = rng.uniform(0.001, feller_min, size=(X_dim,))
+            
+            self.sigma_err = rng.uniform(0.001, 0.04, size=(1,))
 
 
         else:
             # Else, asusming some paramter tuning, set then here.
-            self.kappa, self.theta, self.sigma,self.kappa_p, self.theta_p,self.sigma_err = self.unpack_params(params)
-
+            self.kappa, self.theta, self.sigma,self.lambda_i,self.sigma_err = self.unpack_params(params)
+            self.kappa_p = self.kappa - self.lambda_i
+            self.theta_p = (self.theta *self.kappa + self.lambda_i) / self.kappa_p
+    
     def unpack_params(self,params):
         X_dim = self.X_dim
         kappa, theta, sigma = params[:X_dim],params[X_dim:2*X_dim],params[2*X_dim:3*X_dim]
-        kappa_p, theta_p,sigma_err = params[3*X_dim:4*X_dim],params[4*X_dim:5*X_dim], np.array([params[-1]])
-        return kappa,theta,sigma,kappa_p,theta_p,sigma_err
+        lambda_i, sigma_err = params[3*X_dim:4*X_dim], np.array([params[-1]])
+        return kappa,theta,sigma,lambda_i,sigma_err
     #### Solve affine equations.
 
     # For reference, also the solution in Lando (2004).
@@ -62,7 +71,7 @@ class CIRIntensity():
 
     def cir_solution(self,params,x0,T,rho=1,corr=False):
         # Local copies of kappa, theta to minimize code. Rename to comply with Lando.
-        kappa,theta,sigma1,kappa_p,theta_p,sigma_err = self.unpack_params(params)
+        kappa,theta,sigma1,lambda_i,sigma_err = self.unpack_params(params)
         gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
         # If x0 is one dimensional (intensity), use Lando forthetalas
         
@@ -116,7 +125,7 @@ class CIRIntensity():
 
     def cir_derivatives(self,params,x,T,rho=1, corr=False):
         # Can work in 
-        kappa,theta,sigma1,kappa_p,theta_p,sigma_err = self.unpack_params(params)
+        kappa,theta,sigma1,lambda_i,sigma_err = self.unpack_params(params)
         gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
         if corr == False:
             if isinstance(T,float):
@@ -138,7 +147,7 @@ class CIRIntensity():
                 beta_x[:,i] = bterm1 + bterm2 + bterm3
 
                 # Alpha. 
-                alpha_x += 2 * kappa[i] * theta[i] *(np.exp(gamma[i] * T) - 1) / (2 * gamma[i] + (gamma[i] + kappa[i] -x[i] * sigma1[i]**2) * (np.exp(gamma[i] * T)-1))
+                alpha_x += 2 * kappa[i] * theta[i] *(np.exp(gamma[i] * T) - 1) / denom
 
         return alpha_x, beta_x
 
@@ -265,8 +274,10 @@ class CIRIntensity():
 
     # Kalman filtering.
     def Kalman(self,params,t_obs, t_mat_grid, Y, result = False):
-        print(params)
-        kappa,theta,sigma,kappa_p,theta_p,sigma_err = self.unpack_params(params)
+        # print(params)
+        kappa,theta,sigma,lambda_i,sigma_err = self.unpack_params(params)
+        kappa_p = kappa - lambda_i
+        theta_p = (theta * kappa + lambda_i ) / kappa_p
         # Stop optimization if bad initial params.
         # positivity constraints (soft bounds)
         # if np.any(params <= 0):
@@ -358,6 +369,7 @@ class CIRIntensity():
                 Q_t = np.diag( Q_t.flatten())
 
                 Delta = t_obs[n+1] - t_obs[n]
+                # The prediction step effectively assumes normality. 
                 pred_Xn, pred_Pn = self.Prediction_step(Xn,Pn,phi_X,phi_0,Q_t)
                 # Ensure positivity.
                 pred_Xn = np.maximum(pred_Xn, 1e-6)
@@ -373,18 +385,38 @@ class CIRIntensity():
         kappa     = params[0:d]
         theta     = params[d:2*d]
         sigma     = params[2*d:3*d]
-        kappa_p   = params[3*d:4*d]
-        theta_p   = params[4*d:5*d]
+        lambda_i   = params[3*d:4*d]
         sigma_err = params[-1]
 
-        # latent CIR Feller: 2*kappa*theta - sigma^2 >= 0
-        feller_latent = 2*kappa*theta - sigma**2  # vector length d
+        kappa_p = kappa - lambda_i
+        theta_p = (theta * kappa + lambda_i) / kappa_p
+        cons = []
 
-        # observation Feller: 2*kappa_p*theta_p - sigma^2 >=0
-        feller_obs = 2*kappa_p*theta_p - sigma**2  # vector length d
+        # latent CIR Feller: 2*kappa*theta - sigma^2 >= 0
+        # combine feller conditions.
+        prod_min = np.minimum(kappa*theta,kappa_p*theta_p)
+        feller = 2*prod_min - sigma**2  # vector length d
+        cons.append(feller)
+        # Constraint on lambda.
+        
+        for i in range(kappa.shape[0]):
+            g3 = kappa[i] - lambda_i[i]
+            cons.append(g3)
+            g4 = lambda_i[i] + kappa*theta 
+            cons.append(g4)
+        
+        # for i in range(kappa.shape[0]):
+        #     g3 = kappa[i] - lambda_i[i]
+        #     cons.append(g3)
+            # if lambda_i[i] > 0:
+            #     g3 = kappa[i] - lambda_i[i]
+            #     cons.append(g3)
+            # else: 
+            #     g3 = kappa[i] * theta[i] + lambda_i[i]
+            #     cons.append(g3)
 
         # concatenate both
-        return np.concatenate([feller_latent, feller_obs])  # length 2*d
+        return np.concatenate([feller])  # length 2*d
 
     # Optimizer function.
     def run_kalman_filter(self, t_obs,t_mat_grid,Y,seed=1000):
@@ -392,7 +424,7 @@ class CIRIntensity():
 
         # Get initial values. Z
         x0 = np.concatenate([self.kappa, self.theta, self.sigma, 
-                             self.kappa_p, self.theta_p,self.sigma_err])
+                             self.lambda_i,self.sigma_err])
         x0 = x0.flatten()
 
         # Try a different optimizer than nelder mead
@@ -401,9 +433,8 @@ class CIRIntensity():
         bounds = (
             [(1e-6, 1)] * d +     # kappa
             [(1e-6, 1)] * d +     # theta
-            [(1e-6, 1)] * d +     # kappa_p
-            [(1e-6, 1)] * d +     # theta_p
             [(1e-6, 1)] * d +     # sigma (assuming per-factor vol)
+            [(-1, 1)] * d +     # lambda
             [(1e-6, 0.5)]         # sigma_err
         )
         nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
@@ -414,11 +445,11 @@ class CIRIntensity():
             constraints=(nonlinear_constraint,),
             args=(t_obs, t_mat_grid, Y),
             strategy='best1bin',
-            popsize=5,         # larger popsize -> more exploration
-            maxiter=400,       # allow many generations          
-            tol=1e-5,            # looser tolerance
-            workers=1,
-            updating='immediate',
+            popsize=13,         # larger popsize -> more exploration
+            maxiter=800,       # allow many generations          
+            tol=1e-6,            # looser tolerance
+            workers=-1,
+            updating='deferred',
             polish=False
         )
 
@@ -427,10 +458,22 @@ class CIRIntensity():
             return result.x, 0, 0, 0
 
         # --- Local Refinement ---
+
+        polish_result = minimize(
+        fun=self.Kalman,
+            x0=result.x,  # <-- Use DE's best solution as the start
+            args=(t_obs, t_mat_grid, Y),
+            method='COBYLA',
+            constraints=(nonlinear_constraint,), # <-- Pass the same nonlinear constraints
+            options={
+                'disp': True,
+                'maxiter': 500  # Give it a reasonable number of iterations
+            }
+        )
         # not doing it. slow and yields very little.
 
-        params = result.x
-        self.kalman_obj  = result.fun
+        params = polish_result.x
+        self.kalman_obj  = polish_result.fun
         # Run and return solution
         Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
 
@@ -453,11 +496,91 @@ class CIRIntensity():
                 Xn_out,Zn_out,Pn_out = self.Kalman(out_params,t_obs, t_mat_grid, Y,True)
 
         return out_params, Xn_out,Zn_out,Pn_out
-            
+
+    #### Callibrate CIR++ (single dimensional). Analogous to Hull-White TSM.
+    # Analogous to the Get pricing parameters in LHC
+    def psi_func(self,u,params,gamma_mkt, X0,t_mats):
+        params_full = np.concatenate(params, np.zeros(self.X_dim + 1))
+        # Get deterministic gamma for this u
+        gamma_mkt = self.gamma_fun(params,u,t_mats)
+        # Get log derivative of CIR. Just t derivatives of alpha and beta.
+        alpha_T,beta_T = self.cir_solution_T(params_full,u)
+        du_logP = alpha_T + beta_T @ X0
+
+        psi = gamma_mkt + du_logP
+
+        return psi
+    
+    def psi_objective(self,params,X0,t_mats):
+        T_mat = t_mats[-1]
+        integrand = lambda u: (self.psi_func(u,params,X0)**2)
+        prot_val, _ = quad(integrand,0,T_mat,epsabs=1e-9, epsrel=1e-9)
+
+        return prot_val
+    
+    ## Then have a constraint that it need to be positive. 
+    # def optimize_cir_pp(self,params_init,gamma_mkt,X0,t_mats,t_calc_grid):
+    #     nlc = NonlinearConstraint(lambda x: self.psi_func(x,), 0, np.inf)
+    #     # T_mat must here be the 
+    #     result = minimize(fun=self.psi_objective,
+    #                       x0=params_init,
+    #                       constraints=(nlc,),
+    #                       args = (T_mat,X0),
+    #                       method = 'trust-constr',
+    #                       options = {
+    #                         "xatol": 1e-4,
+    #                         "fatol": 1e-4,
+    #                         "maxiter": 500,
+    #                         "disp": True
+    #                         }
+    #                         )
+
+    # Redefine the piecewise constant gamma func.
+    def gamma_fun(self, params, u, t_mats):
+        """Piecewise constant gamma(u). params length == len(t_mats)-1."""
+        t_mats = np.asarray(t_mats)
+        # if before first grid point
+        if u < t_mats[0]:
+            return 0.0
+        # find index j such that t_mats[j] <= u < t_mats[j+1]
+        idx = np.searchsorted(t_mats, u, side='right') - 1
+        if idx < 0:
+            return 0.0
+        if idx >= len(params):
+            # if u beyond last interval, return last param
+            return params[-1]
+        return params[idx]
+
+
+    def nonlinear_constraints(self, T_mat,params,gamma_mkt,X0):
+        """
+        Vector-valued constraint function for NonlinearConstraint.
+        Returns array `cons` such that cons >= 0 are feasible.
+        If params can't be unpacked properly, returns a negative array (infeasible).
+        """
+        # expected number of constraints: g1, g2 and 2*m for g3,g4 converted -> total 2 + 2*m
+        params = np.asarray(params, dtype=float)
+
+        lambda_i,sigma,sigma_err = params[0],params[1],params[2]
+        cons = []
+        cons.append(self.psi_func(T_mat,params,gamma_mkt,X0))  # theta_p <= 1
+
+
+        cons = np.asarray(cons, dtype=float)
+
+
+        return cons
+
+
+
     # Simulation will likely also be th eway to go about expression in Filipovic (tedious)
-    def simulate_intensity(self, lambda0,T,M,scheme,seed=1000):
-        theta = self.theta
-        kappa = self.kappa
+    def simulate_intensity(self, lambda0,T,M,scheme,seed=1000, measure = 'Q'):
+        if measure == 'Q':
+            theta = self.theta
+            kappa = self.kappa
+        elif measure == 'P':
+            theta = self.theta_p
+            kappa = self.kappa_p
         # Do baseline calculations
         delta = T / M
         X_dim = lambda0.shape[0]
@@ -470,22 +593,25 @@ class CIRIntensity():
         sigma_mat = np.diag(self.sigma.flatten())
         if scheme == "Euler":
             for i in range(1,M+1):
-                mu_t = kappa_mat @ (theta_vec - path[i - 1,:])
-                sigma_t = sigma_mat *  np.sqrt(path[i-1,:])
-                path[i,:] = path[i - 1,:] + delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]
+                path_prev = np.maximum(path[i-1,:], 0) # Clip to have valid sqrt
+                mu_t = kappa_mat @ (theta_vec - path_prev)
+                sigma_t = sigma_mat *  np.sqrt(path_prev)
+                path[i,:] = path_prev + delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]
         elif scheme == "Milstein":
             for i in range(1,M+1):
-                mu_t = kappa_mat @ (theta_vec - path[i - 1,:])
-                sigma_t = sigma_mat *  np.sqrt(path[i-1])
-                sigma_prime_t = sigma_mat * 1/(2*np.sqrt(path[i-1]))
-                path[i,:] = path[i - 1,:] + delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]+ 1/2 * delta* sigma_prime_t @ sigma_t @ (W[i-1,:]**2-1)
+                path_prev = np.maximum(path[i-1,:], 0) # Clip to have valid sqrt
+                mu_t = kappa_mat @ (theta_vec - path_prev)
+                sigma_t = sigma_mat *  np.sqrt(path_prev)
+                sigma_prime_t = sigma_mat * 1/(2*np.sqrt(path_prev))
+                path[i,:] = path_prev+ delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]+ 1/2 * delta* sigma_prime_t @ sigma_t @ (W[i-1,:]**2-1)
         elif scheme == "Exact":
             # TODO: Correct this.
             for i in range(1,M+1):
+                path_prev = np.maximum(path[i-1,:], 0) # Clip to have valid sqrt
                 k = 4 * kappa * theta / (self.sigma**2)
                 l = 4 * kappa * np.exp(-kappa * T_return[i]) / (self.sigma**2 * (1-np.exp(-kappa *T_return[i]))) * path[i-1]
                 factor = self.sigma**2 * (1 - np.exp(-kappa * T_return[i])) / (4*kappa)
-                path[i] = factor * ncx2.rvs(df = k, nc = l)
+                path[i] = factor * ncx2.rvs(df = k, nc = l, random_state = seed)
 
         return T_return, path
     
@@ -664,25 +790,40 @@ class CIRIntensity():
         return np.real(first_term/2 - Laplace_int/np.pi)
 
 
+    def cir_solution_T(self,cir_params,T,rho=1):
+        x0 = np.zeros(self.X_dim)
+        kappa,theta,sigma1,lambda_i,sigma_err = self.unpack_params(cir_params)
+        gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
+        beta_nom1 =  (- 2 * rho * gamma*(np.exp(gamma*T)) + 
+                        gamma*x0 * np.exp(gamma * T) * (gamma - kappa))
 
-    # # Derivatives of alpha, beta.
-    # def cir_derivatives(self,params,x0,T,rho=1):
-    #     kappa,theta,sigma1,kappa_p,theta_p,sigma_err = self.unpack_params(params)
-    #     gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
+        beta_denom = (2 * gamma + 
+                        (gamma + kappa - x0 * sigma1**2) * (np.exp(gamma * T) - 1))
 
-    #     denom = (2 * gamma + (gamma + kappa - x0 * sigma1**2)*(np.exp(gamma * T)-1))
+        
+        term1 = beta_nom1 / beta_denom
 
-    #     # Beta
-    #     bterm1  = - (2*rho*(np.exp(gamma*T)-1)**2 * sigma1**2) / denom**2
-    #     bterm2 = (np.exp(gamma * T)*(gamma-kappa) + (gamma+kappa)) / denom
-    #     # This  is tge second term of derivatives from the 'bottom'
-    #     bterm3 = x0 * (np.exp(gamma * T)*(gamma-kappa) + (gamma+kappa)) *sigma1**2 *(np.exp(gamma*T)-1) / denom**2
+        beta_nom2 = (- 2 * rho * (np.exp(gamma*T)-1) + 
+                        x0 * np.exp(gamma * T) * (gamma - kappa) + 
+                        x0 * (gamma + kappa)) *  (gamma + kappa - x0 * sigma1**2) *gamma* (np.exp(gamma * T)) 
+        beta_denom2 = (2 * gamma + 
+                        (gamma + kappa - x0 * sigma1**2) * (np.exp(gamma * T) - 1))**2
 
-    #     beta_x = bterm1 + bterm2 + bterm3
+        term2 = beta_nom2 / beta_denom2
 
-    #     # Alpha.
-    #     #alpha_x = 2 * kappa * theta * (2 * gamma + (gamma + kappa -x * sigma1**2) * (np.exp(gamma * T)-1))*(np.exp(gamma * T) - 1)
-    #     alpha_x = 2 * kappa * theta *(np.exp(gamma * T) - 1) / (2 * gamma + (gamma + kappa -x0 * sigma1**2) * (np.exp(gamma * T)-1))
+        beta_T = term1 - term2
 
-    #     return alpha_x, beta_x
+        # get alpha, alo verify above. 
+        alpha_log_nom = (2 * gamma * np.exp((gamma + kappa ) * T / 2))
 
+        alpha_log_denom = (2 * gamma + 
+                            (gamma + kappa - x0 * sigma1**2)*(np.exp(gamma * T)-1))
+        
+        alpha_T = 2 * kappa * theta / sigma1**2 * (
+            alpha_log_denom/alpha_log_nom * (
+                gamma * (gamma + kappa) / alpha_log_denom - 
+                alpha_log_nom * (gamma + kappa - x0*sigma1**2) * gamma * np.exp(gamma*T) /alpha_log_denom
+            )
+        )
+                    
+        return alpha_T, beta_T

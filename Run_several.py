@@ -11,128 +11,130 @@ if __name__ == "__main__":
 
     #### Preliminary investigation.
     sub_df = pd.read_excel("./Data/subset_data.xlsx")
-    firms = ['BBVSM', 'BNP','CMZB','DANBNK','DB', 'HSBC', 'USPA']
+    # firms = ['BBVSM', 'BNP','CMZB','DANBNK','DB', 'HSBC', 'USPA']
 
     # firms = ['CMZB','DB', 'HSBC', 'USPA']
     # firms = ['DB', 'HSBC', 'USPA']
-    # firms = ['DANBNK']
+    firms = ['DANBNK']
     # Pivot
 
 #### SECTION 1: LHC KALMAN FITS
     # Loop over each firm in list.
-    # for firm in firms:
-    #     test_df = sub_df[(sub_df['Ticker']==firm)]
-    #     test_df = test_df.pivot(index = ['Date','Ticker'],
-    #                             columns='Tenor',values = 'Par Spread').reset_index()
-    #     # Test on subset data ownly to get very few obs. One large spread increase to test.
-    #     test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
+    for firm in firms:
+        test_df = sub_df[(sub_df['Ticker']==firm)]
+        test_df = test_df.pivot(index = ['Date','Ticker'],
+                                columns='Tenor',values = 'Par Spread').reset_index()
+        # Test on subset data ownly to get very few obs. One large spread increase to test.
+        test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
 
-    #     t = np.array(test_df['Years'])
+        t = np.array(test_df['Years'])
 
-    #     mat_grid = np.array([1,3,5,7,10])
-    #     t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
-    #     # Forward fill in case of nans.
-    #     CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
+        mat_grid = np.array([1,3,5,7,10])
+        t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
+        # Forward fill in case of nans.
+        CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
 
-    #     ### Run models. For starters, we are just testing varois kalman versions.
-    #     for X_dim in [3,2]:
-    #         lhc = LHC_single( r=0.0252,delta=0.4,cds_tenor= 0.25 )
-    #         lhc.initialise_LHC(Y_dim=1,X_dim=X_dim,X0=0.5,rng=None)
+        ### Run models. For starters, we are just testing varois kalman versions.
+        for X_dim in [3,2]:
+            lhc = LHC_single( r=0.0252,delta=0.4,cds_tenor= 0.25 )
+            lhc.initialise_LHC(Y_dim=1,X_dim=X_dim,X0=0.5,rng=None)
 
 
-    #         optim_params,  Xn,Zn, Pn= lhc.run_n_kalmans(t, t_mat_grid, CDS_obs,base_seed = 300,n_restarts=1)
-    #         Xn_kalman,Yn_kalman = lhc.kalman_X_Y(t,Xn)
+            optim_params,  Xn,_, Pn= lhc.run_n_kalmans(t, t_mat_grid, CDS_obs,base_seed = 300,n_restarts=1)
+            Xn_kalman,Yn_kalman = lhc.kalman_X_Y(t,Xn)
+            # Get reconstructed spreads
+            Zn = lhc.CDS_model(t, t_mat_grid,CDS_obs,t,Xn_kalman,Yn_kalman)
 
-    #         print(f'Optimal Paramerters {optim_params}')
-    #         kappa, theta, gamma1 = optim_params[:lhc.m],optim_params[lhc.m:2*lhc.m], optim_params[2*lhc.m]
+            print(f'Optimal Paramerters {optim_params}')
+            kappa, theta, gamma1 = optim_params[:lhc.m],optim_params[lhc.m:2*lhc.m], optim_params[2*lhc.m]
 
-    #         default_intensity = lhc.default_intensity(Xn_kalman.T,Yn_kalman)
-    #         directory = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}"
-    #         filepath = os.path.join(directory, f"Kalman_resultsLHC_NX{X_dim}.npz")
+            default_intensity = lhc.default_intensity(Xn_kalman.T,Yn_kalman)
+            directory = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}"
+            filepath = os.path.join(directory, f"Kalman_resultsLHC_NX{X_dim}.npz")
 
-    #         # Ensure directory exists
-    #         os.makedirs(directory, exist_ok=True)
+            # Ensure directory exists
+            os.makedirs(directory, exist_ok=True)
 
-    #         np.savez(filepath,
-    #                 final_param=optim_params,
-    #                 Xn=Xn_kalman,
-    #                 Yn=Yn_kalman,
-    #                 Default_intensity = default_intensity,
-    #                 CDS_model = Zn) #,
-    #         print(f'Finised X_dim {X_dim}, firm {firm}')
-        ### Then run comparison plots a la result_plots.
-        # But run in seperate loop so no need for rerun.
+            np.savez(filepath,
+                    final_param=optim_params,
+                    Xn=Xn_kalman,
+                    Yn=Yn_kalman,
+                    Default_intensity = default_intensity,
+                    CDS_model = Zn) #,
+            print(f'Finised X_dim {X_dim}, firm {firm}')
+        ## Then run comparison plots a la result_plots.
+        #But run in seperate loop so no need for rerun.
 
 ##### SECTION 2: CIR MODEL FITS.
-    # for firm in firms:
+    for firm in firms:
 
-    #     r = 0.0252
-    #     delta = 0.4
-    #     tenor = 0.25
+        r = 0.0252
+        delta = 0.4
+        tenor = 0.25
 
-    #     test_df = sub_df[(sub_df['Ticker']==firm)]
-    #     test_df = test_df.pivot(index = ['Date','Ticker'],
-    #                             columns='Tenor',values = 'Par Spread').reset_index()
-    #     # Test on subset data ownly to get very few obs. One large spread increase to test.
-    #     test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
+        test_df = sub_df[(sub_df['Ticker']==firm)]
+        test_df = test_df.pivot(index = ['Date','Ticker'],
+                                columns='Tenor',values = 'Par Spread').reset_index()
+        # Test on subset data ownly to get very few obs. One large spread increase to test.
+        test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
 
-    #     t = np.array(test_df['Years'])
+        t = np.array(test_df['Years'])
 
-    #     mat_grid = np.array([1,3,5,7,10])
-    #     t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
-    #     # Forward fill in case of nans.
-    #     CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
+        mat_grid = np.array([1,3,5,7,10])
+        t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
+        # Forward fill in case of nans.
+        CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
 
-    #     # Read in inferred survival probs.
-    #     data = np.load(f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/{firm}/Data_{firm}.npz")
-    #     t_mats_plots = data['t_mats_plots']
-    #     survival=data['survival']
-    #     Gamma = data['Gamma']
-    #     default_prob = data['default_prob']
+        # Read in inferred survival probs.
+        data = np.load(f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/{firm}/Data_{firm}.npz")
+        t_mats_plots = data['t_mats_plots']
+        survival=data['survival']
+        Gamma = data['Gamma']
+        default_prob = data['default_prob']
 
-    #     t_mats_plots_kalman = t_mats_plots[np.isin(t_mats_plots,mat_grid).flatten()]
+        t_mats_plots_kalman = t_mats_plots[np.isin(t_mats_plots,mat_grid).flatten()]
 
-    #     survival_kalman = survival[:,np.isin(t_mats_plots, mat_grid).flatten()]
-    #     Gamma_kalman = Gamma[:,np.isin(t_mats_plots, mat_grid).flatten()]
+        survival_kalman = survival[:,np.isin(t_mats_plots, mat_grid).flatten()]
+        Gamma_kalman = Gamma[:,np.isin(t_mats_plots, mat_grid).flatten()]
 
 
-    #     # Negative process. Multiply by -1 everywhere. Let A and a get these too. 
-    #     for X_dim in [2]:# , 2]:
+        # Negative process. Multiply by -1 everywhere. Let A and a get these too. 
+        for X_dim in [2,3]:# , 2]:
 
-    #         cir = CIRIntensity(r,delta,tenor,X_dim)
-    #         x0 = np.array([0])
-    #         params, Xn,Zn,Pn = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=2000)
+            cir = CIRIntensity(r,delta,tenor,X_dim)
+            x0 = np.array([0])
+            params, Xn,Zn,Pn = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=2000)
 
-    #         # Ttry with several restarts. 
-    #         # params, Xn,Zn,Pn = cir.run_n_kalman(t,t_mat_grid,Y=Gamma_kalman,base_seed=206,n_restarts=5)
+            # Ttry with several restarts. 
+            # params, Xn,Zn,Pn = cir.run_n_kalman(t,t_mat_grid,Y=Gamma_kalman,base_seed=206,n_restarts=5)
 
-    #         # Set new optimal parameters too.
-    #         cir.set_params(params)
-    #         # default_prob_model= np.exp(-Zn)
-    #         # Save values:
+            # Set new optimal parameters too.
+            cir.set_params(params)
+            # default_prob_model= np.exp(-Zn)
+            # Save values:
 
-    #         # With Params in place, we can utilize CIR class to do pricing, simulations etc. 
-    #         CDS_cir = np.zeros(survival_kalman.shape)
-    #         for n in range(survival_kalman[:,0].shape[0]):    
-    #             CDS_cir[n,:] = cir.cds_spread(Xn[n,:],params,t[n],t_mat_grid[:,n])
-    #             print(f'Done with {(n+1)/survival_kalman[:,0].shape[0]} %')
+            # With Params in place, we can utilize CIR class to do pricing, simulations etc. 
+            CDS_cir = np.zeros(survival_kalman.shape)
+            for n in range(survival_kalman[:,0].shape[0]):    
+                CDS_cir[n,:] = cir.cds_spread(Xn[n,:],params,t[n],t_mat_grid[:,n])
+                print(f'Done with {(n+1)/survival_kalman[:,0].shape[0]} %')
 
-    #         # Default intensity probability since inception (identical to state if dim=1)
-    #         default_intensity = np.sum(Xn,axis=1)
+            # Default intensity probability since inception (identical to state if dim=1)
+            default_intensity = np.sum(Xn,axis=1)
 
-    #         # Get induced default probability: 
-    #         Yn = np.exp(-np.cumsum(default_intensity*(t[1]-t[0]))) # only approximates
+            # Get induced default probability: 
+            Yn = np.exp(-np.cumsum(default_intensity*(t[1]-t[0]))) # only approximates
 
-    #         # Actual/observed
+            # Actual/observed
 
-    #         np.savez(f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}/Kalman_resultsCIR_Xdim{X_dim}.npz",
-    #                 final_param=params,
-    #                 Xn=Xn,
-    #                 Zn=Zn,
-    #                 Pn = Pn,
-    #                 Yn = Yn,
-    #                 default_intensity = default_intensity,
-    #                 CDS_cir = CDS_cir)
+            np.savez(f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}/Kalman_resultsCIR_Xdim{X_dim}.npz",
+                    final_param=params,
+                    Xn=Xn,
+                    Zn=Zn,
+                    Pn = Pn,
+                    Yn = Yn,
+                    default_intensity = default_intensity,
+                    CDS_cir = CDS_cir)
 
 
 
