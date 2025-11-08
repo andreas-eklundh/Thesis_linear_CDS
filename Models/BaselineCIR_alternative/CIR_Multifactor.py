@@ -39,18 +39,20 @@ class CIRIntensity():
             self.lambda_i = np.zeros(X_dim) 
             for i in range(X_dim):
                 self.lambda_i[i] = rng.uniform(-self.theta[i]*self.kappa[i], self.kappa[i], 1) 
+                # self.lambda_i[i] = rng.uniform(-1, self.kappa[i], 1) 
 
             # initialise all positive.
             self.kappa_p = self.kappa - self.lambda_i
-            self.theta_p = (self.theta *self.kappa + self.lambda_i ) / self.kappa_p
+            # self.theta_p = (self.theta *self.kappa +self.lambda_i ) / self.kappa_p
+            self.theta_p = (self.theta *self.kappa +self.lambda_i ) / self.kappa_p
 
             # Set sigma in feller grid.
             # Sigma to be in minimum of feller conds.
             feller_min = np.minimum(np.sqrt(2*self.kappa*self.theta),
                                     np.sqrt(2*self.kappa_p*self.theta_p))
             self.sigma = rng.uniform(0.001, feller_min, size=(X_dim,))
-            
-            self.sigma_err = rng.uniform(0.001, 0.04, size=(1,))
+            # Again, initialise with relatively low error. 
+            self.sigma_err = rng.uniform(0.00001, 0.0001, size=(1,))
 
 
         else:
@@ -58,7 +60,8 @@ class CIRIntensity():
             self.kappa, self.theta, self.sigma,self.lambda_i,self.sigma_err = self.unpack_params(params)
             self.kappa_p = self.kappa - self.lambda_i
             self.theta_p = (self.theta *self.kappa + self.lambda_i) / self.kappa_p
-    
+            # self.theta_p = (self.theta *self.kappa ) / self.kappa_p
+
     def unpack_params(self,params):
         X_dim = self.X_dim
         kappa, theta, sigma = params[:X_dim],params[X_dim:2*X_dim],params[2*X_dim:3*X_dim]
@@ -274,10 +277,11 @@ class CIRIntensity():
 
     # Kalman filtering.
     def Kalman(self,params,t_obs, t_mat_grid, Y, result = False):
-        # print(params)
+        print(params)
         kappa,theta,sigma,lambda_i,sigma_err = self.unpack_params(params)
         kappa_p = kappa - lambda_i
         theta_p = (theta * kappa + lambda_i ) / kappa_p
+        # theta_p = (theta * kappa  ) / kappa_p
         # Stop optimization if bad initial params.
         # positivity constraints (soft bounds)
         # if np.any(params <= 0):
@@ -327,8 +331,14 @@ class CIRIntensity():
         # To speed up, solve ricatti equations. Will be time homogenous.
         # Solve Ricatti Equations. Might move inside loop later - MUCH FASTER OUT HERE, IF SAME DIST APPROX.
         # THIS WILL LIKELY DO.
-        a,A =  self.cir_solution(params,x0 = x0_zcb,T = t_mat_grid[:,0] - t_obs[0])
-        a,A = -a,-A
+        deltas = np.array([t_obs[i] - t_obs[i-1] for i in range(1,t_obs.shape[0])])
+        unique_delta = np.unique(np.round(deltas,7))
+        # Precalculate A and b prior to.
+        a_A = []
+        for i in range(0,unique_delta.shape[0]):
+            a,A =  self.cir_solution(params,x0 = x0_zcb,T = t_mat_grid[:,0] - t_obs[0])
+            a,A = -a,-A
+            a_A.append([a,A])
 
         # Utilize that we can compute this up front.
         # Create arrays based on obs.
@@ -336,6 +346,12 @@ class CIRIntensity():
         phi_X = expm(-kappa_P_diag * Delta)
 
         for n in range(0,n_obs):
+            # Special first case
+            if n==0:
+                delta_curr = unique_delta[0]
+                delta_idx = np.argmax(delta_curr == unique_delta)
+                a = a_A[int(delta_idx)][0]
+                A = a_A[int(delta_idx)][1]
             # UPDATE STEP
             Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
             Xn = np.maximum(Xn,1e-6) # Truncate Xn
@@ -369,6 +385,10 @@ class CIRIntensity():
                 Q_t = np.diag( Q_t.flatten())
 
                 Delta = t_obs[n+1] - t_obs[n]
+                delta_curr = np.round(Delta,7)
+                delta_idx = np.argmax(delta_curr == unique_delta)
+                a = a_A[int(delta_idx)][0]
+                A = a_A[int(delta_idx)][1]
                 # The prediction step effectively assumes normality. 
                 pred_Xn, pred_Pn = self.Prediction_step(Xn,Pn,phi_X,phi_0,Q_t)
                 # Ensure positivity.
@@ -390,6 +410,8 @@ class CIRIntensity():
 
         kappa_p = kappa - lambda_i
         theta_p = (theta * kappa + lambda_i) / kappa_p
+        # theta_p = (theta * kappa ) / kappa_p
+
         cons = []
 
         # latent CIR Feller: 2*kappa*theta - sigma^2 >= 0
@@ -429,13 +451,13 @@ class CIRIntensity():
 
         # Try a different optimizer than nelder mead
         d = self.X_dim  # number of factors
-
+        # Kappa and theta may be slightly larger than 1 presumably. 
         bounds = (
-            [(1e-6, 1)] * d +     # kappa
-            [(1e-6, 1)] * d +     # theta
+            [(1e-6, 2)] * d +     # kappa
+            [(1e-6, 2)] * d +     # theta
             [(1e-6, 1)] * d +     # sigma (assuming per-factor vol)
             [(-1, 1)] * d +     # lambda
-            [(1e-6, 0.5)]         # sigma_err
+            [(1e-6, 0.0001)]         # sigma_err
         )
         nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
 
@@ -445,9 +467,11 @@ class CIRIntensity():
             constraints=(nonlinear_constraint,),
             args=(t_obs, t_mat_grid, Y),
             strategy='best1bin',
-            popsize=13,         # larger popsize -> more exploration
+            popsize=15,         # larger popsize -> more exploration
             maxiter=800,       # allow many generations          
             tol=1e-6,            # looser tolerance
+            # workers=1,
+            # updating='immediate',            
             workers=-1,
             updating='deferred',
             polish=False
@@ -459,21 +483,21 @@ class CIRIntensity():
 
         # --- Local Refinement ---
 
-        polish_result = minimize(
-        fun=self.Kalman,
-            x0=result.x,  # <-- Use DE's best solution as the start
-            args=(t_obs, t_mat_grid, Y),
-            method='COBYLA',
-            constraints=(nonlinear_constraint,), # <-- Pass the same nonlinear constraints
-            options={
-                'disp': True,
-                'maxiter': 500  # Give it a reasonable number of iterations
-            }
-        )
+        # polish_result = minimize(
+        # fun=self.Kalman,
+        #     x0=result.x,  # <-- Use DE's best solution as the start
+        #     args=(t_obs, t_mat_grid, Y),
+        #     method='COBYLA',
+        #     constraints=(nonlinear_constraint,), # <-- Pass the same nonlinear constraints
+        #     options={
+        #         'disp': True,
+        #         'maxiter': 500  # Give it a reasonable number of iterations
+        #     }
+        # )
         # not doing it. slow and yields very little.
 
-        params = polish_result.x
-        self.kalman_obj  = polish_result.fun
+        params = result.x
+        self.kalman_obj  = result.fun
         # Run and return solution
         Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
 
@@ -593,13 +617,13 @@ class CIRIntensity():
         sigma_mat = np.diag(self.sigma.flatten())
         if scheme == "Euler":
             for i in range(1,M+1):
-                path_prev = np.maximum(path[i-1,:], 0) # Clip to have valid sqrt
+                path_prev = np.maximum(path[i-1,:],  1e-8) # Clip to have valid sqrt
                 mu_t = kappa_mat @ (theta_vec - path_prev)
                 sigma_t = sigma_mat *  np.sqrt(path_prev)
                 path[i,:] = path_prev + delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]
         elif scheme == "Milstein":
             for i in range(1,M+1):
-                path_prev = np.maximum(path[i-1,:], 0) # Clip to have valid sqrt
+                path_prev = np.maximum(path[i-1,:], 1e-8) # Clip to have valid sqrt
                 mu_t = kappa_mat @ (theta_vec - path_prev)
                 sigma_t = sigma_mat *  np.sqrt(path_prev)
                 sigma_prime_t = sigma_mat * 1/(2*np.sqrt(path_prev))
