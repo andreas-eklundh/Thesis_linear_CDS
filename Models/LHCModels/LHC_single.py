@@ -78,9 +78,10 @@ def mat_exp_approx(A, dt, tol=1e-9):
 
 # Rebuild dynamics and return the LHCStruct
 @njit
-def rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor):
+def rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor,lambda_i=None):
     m = theta.shape[0]
-
+    if lambda_i is None:
+        lambda_i = np.zeros(m)
     # b: shape (m, Y_dim)
     b = np.zeros((m, Y_dim))
     b[m-1, 0] = theta[-1] * kappa[-1]
@@ -88,7 +89,7 @@ def rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor):
     # beta: shape (m, m)
     beta = np.zeros((m, m))
     for i in range(m):
-        beta[i, i] = -kappa[i]
+        beta[i, i] = - (kappa[i] - lambda_i[i])
         if i + 1 < m:
             beta[i, i+1] = kappa[i] * theta[i]
 
@@ -361,18 +362,18 @@ def build_P_params(params,params_q,lhc_p):
         gamma1 = params_q[-1]
 
         lambda_i = params[:m]
-        kappa_p = kappa - lambda_i # This is under (i) in THM B.1.
-        theta_p = (kappa*theta) / kappa_p
-        theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+        # kappa_p = kappa - lambda_i # This is under (i) in THM B.1.
+        # theta_p = (kappa*theta) / kappa_p
+        # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
         # theta_p = theta_p + lambda_i / kappa_p
 
         sigma_i,sigma_err = params[m:2*m], params[-1]
 
         # Rebuild P parameters.
-        lhc = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
+        lhc = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor, lambda_i)
 
 
-        return lhc,kappa_p,theta_p, sigma_i, sigma_err
+        return lhc,lambda_i, sigma_i, sigma_err
 
 
 
@@ -449,8 +450,8 @@ def get_states(lhc, t_obs, T_M_grid, CDS_obs,kappa, theta, gamma1):
     Y = np.ones((n_obs)) # Implicitly sets Y0
     # Time 0 values
     # Todo: Rewrite this to start off at mu. then transform.
-    mu1 = solve_mu1(kappa, theta, gamma1)
-    mu = compute_stationary(kappa, theta,m, gamma1,mu1)
+    mu1 = solve_mu1(kappa, theta, gamma1,lambda_i=None)
+    mu = compute_stationary(kappa, theta,m, gamma1,mu1,lambda_i=None)
     X[:, 0] = mu
     # Previous Z, starting guess
     Z = np.ones((m,n_obs))
@@ -716,22 +717,23 @@ def ukf_update_step(X_pred, P_pred, h, h_p_ignored, R_k, t_obs, t0, t_mats, lhc,
 #######
 # Define f(mu1)
 @njit
-def f(mu1, kappa, theta,gamma1,m):
+def f(mu1, kappa, theta,gamma1,m,lambda_i):
     prod = 1.0
     for j in range(m):
-        prod *= kappa[j] * theta[j] / (mu1 * gamma1 - kappa[j])
+        prod *= kappa[j] * theta[j] / (mu1 * gamma1 - (kappa[j]-lambda_i[j]))
     return ((-1)**m) * prod - mu1
 
 @njit
-def solve_mu1(kappa, theta, gamma1):
+def solve_mu1(kappa, theta, gamma1, lambda_i):
     m = len(kappa)
-
+    if lambda_i is None:
+        lambda_i = np.zeros(m)
 
     # Bisection method parameters
     a = 1e-6
     b = 1.0 - 1e-6
-    fa = f(a, kappa, theta,gamma1,m)
-    fb = f(b, kappa, theta,gamma1,m)
+    fa = f(a, kappa, theta,gamma1,m,lambda_i)
+    fb = f(b, kappa, theta,gamma1,m,lambda_i)
 
     # Check for valid sign change
     if fa * fb > 0 or not np.isfinite(fa) or not np.isfinite(fb):
@@ -741,7 +743,7 @@ def solve_mu1(kappa, theta, gamma1):
     # Bisection loop
     for _ in range(100):
         mid = 0.5 * (a + b)
-        fm = f(mid, kappa, theta,gamma1,m)
+        fm = f(mid, kappa, theta,gamma1,m,lambda_i)
         if abs(fm) < 1e-10 or (b - a) < 1e-10:
             return mid
         if fa * fm < 0:
@@ -753,13 +755,15 @@ def solve_mu1(kappa, theta, gamma1):
     return 0.5 * (a + b)
 
 @njit
-def compute_stationary(kappa, theta, m, gamma1, mu1):
+def compute_stationary(kappa, theta, m, gamma1, mu1,lambda_i):
     mu_process = np.zeros(m)
+    if lambda_i is None:
+        lambda_i = np.zeros(m)
     for i in range(m-1, -1, -1):
         sign = (-1)**(m - (i+1) + 1)
         prod = 1.0
         for j in range(i, m):
-            prod *= kappa[j] * theta[j] / (mu1 * gamma1 - kappa[j])
+            prod *= kappa[j] * theta[j] / (mu1 * gamma1 - (kappa[j]-lambda_i[j]))
         mu_process[i] = sign * prod
     return mu_process
 
@@ -778,12 +782,12 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     # Define the parameters already to be able to look over them
     params_q = params[:2*m+1]
     kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
-    # gamma1 = gamma1_p * kappa[0]
+
     params_p = params[2*m+1:]
     lambda_i,sigma,sigma_err = params_p[:m],params_p[m:2*m], params_p[-1]
-    kappa_p = kappa - lambda_i
-    theta_p = (kappa*theta) / kappa_p
-    theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]    # Get initial guesses.
+    # kappa_p = kappa - lambda_i
+    # theta_p = (kappa*theta) / kappa_p
+    # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]    # Get initial guesses.
     # theta_p = theta_p + lambda_i / kappa_p
 
     n_obs = CDS_obs.shape[0]
@@ -809,8 +813,8 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     Pn = np.zeros((n_obs,L,L))
     # Initial Predictions of means and cov
     # Only criteria on mu1 - mu1 < k/kappa. Set to theta
-    mu1 = solve_mu1(kappa_p, theta_p, gamma1)
-    mu = compute_stationary(kappa_p,theta_p,m,gamma1,mu1 = mu1)
+    mu1 = solve_mu1(kappa, theta, gamma1,lambda_i)
+    mu = compute_stationary(kappa,theta,m,gamma1,mu1 = mu1,lambda_i=lambda_i)
     # Bound mu jus in case.
     mu = np.clip(mu,0,1)
     pred_Xn = mu #drift_term(mu,lhc_p,Delta) #mu
@@ -909,17 +913,17 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
     # For numerical stability.
     params_p = params[2*m+1:]
     params_q = params[:2*m+1]
-
     lambda_i = params_p[:m]
     kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
+
     # gamma1 = gamma1_p * kappa[0]
-    kappa_p = kappa - lambda_i
-    theta_p = (kappa*theta) / kappa_p
-    theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+    # kappa_p = kappa - lambda_i
+    # theta_p = (kappa*theta) / kappa_p
+    # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
     # theta_p = theta_p + lambda_i / kappa_p
 
-    lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
-    lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor)
+    lhc_p = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor, lambda_i)
+    lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor, lambda_i=None)
 
     neg_loglik,_, _, _ = kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0)
 
@@ -951,39 +955,26 @@ def nonlinear_constraints( params, m):
     # Directly enforced relationship - need a better choise for high m
     # gamma1 = gamma1_p * kappa[0]
 
-    kappa_p = kappa - lambda_i
-    theta_p = (kappa*theta) / kappa_p
-    theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+    # kappa_p = kappa - lambda_i
+    # theta_p = (kappa*theta) / kappa_p
+    # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
     # theta_p = theta_p + lambda_i / kappa_p
 
     # ensure arrays
     sigma = np.asarray(sigma, dtype=float)
 
-    # Constraints on lambda.
+    # Constraints on lambda. 'Mean reversion needs to be positive'.
     for i in range(m):
-        if i == m-1:
-            g1 = lambda_i[i] + theta[i] * kappa[i]   
-            cons.append(g1)
-            g1 = kappa[i]- lambda_i[i] 
-            cons.append(g1)
-        else:
-            # This 
-            g1 = kappa[i]- lambda_i[i] 
-            cons.append(g1)
+        g1 = kappa[i] - lambda_i[i] 
+        cons.append(g1)
 
     ### Note, the constraints on theta_p and kappa_p still needs to hold...
-    # for i in range(m):
+    
     for i in range(m):
-        if i == m-1:
-            g1 = theta[i] * kappa[i]   - 0.5 * (sigma[i]**2)
-            cons.append(g1)
-            g1 = theta_p[i] * kappa_p[i]  - 0.5 * (sigma[i]**2)
-            cons.append(g1)
-        else:
-            # This 
-            g1 = theta_p[i] * kappa_p[i] 
-            cons.append(g1)
+        g1 = theta[i] * kappa[i]  # - 0.5 * (sigma[i]**2)
+        cons.append(g1)
     # g3 <= 0 -> -g3 >= 0
+
     for i in range(m):
         # Constraint for process m with Y_t
         if i == m-1:
@@ -992,15 +983,18 @@ def nonlinear_constraints( params, m):
             g3 = gamma1 - kappa[i] + kappa[i] * theta[i] + 0.5 * (sigma[i] ** 2)
         cons.append(-g3)
 
-
     # g3 <= 0 -> -g3 >= 0
     for i in range(m):
-        if i == m-1 :
-            g3 = gamma1 - kappa_p[i] + (kappa_p[i] * theta_p[i]) + 0.5 * (sigma[i]**2)
-        else:
-            g3 = gamma1 - kappa_p[i] + (kappa_p[i] * theta_p[i]) + 0.5 * (sigma[i]**2)
+        g3 = gamma1 - (kappa[i] - lambda_i[i]) + (kappa[i] * theta[i]) + 0.5 * (sigma[i]**2)
         cons.append(-g3)
 
+
+    ## All the above are direct artifacts from the model. Still too much flexibility. Choose gamma1
+    # s.t. smaller than all thetas. 
+    # Other constraint in init: that is only for bookkeeping in multivar. Accounted for here
+    # in the sigma constraints.
+    # g4 = theta[0] - gamma1
+    # cons.append(g4)
 
     cons = np.asarray(cons, dtype=float)
 
@@ -1027,25 +1021,28 @@ class LHC_single():
 
         ### Theta needs to be in (0,1)
         self.theta = rng.uniform(0.00, 1, size=(X_dim,))       # Theta coeffs
+        self.theta[0] = 0.5
         # Based on that, select kappa freely. But at some magnitude to ensure gamma too.
-        self.kappa = rng.uniform(0.3, 1, size=(X_dim,))       # Kappa given
+        self.kappa = rng.uniform(0.1, 1, size=(X_dim,))       # Kappa given
 
         # Then gamma has a constraint. But hold for every combination.
         self.gamma1 = rng.uniform(0,np.min(self.kappa*(1-self.theta)), size=(Y_dim,))       # gamma1 strictly pos.
-        # Then get actual default intensity.
-        # self.gamma1 = self.kappa*self.gamma1_p
+        # upper_bounds = np.min((1-self.theta)*self.kappa)
+        # self.gamma1 = rng.uniform(0,np.minimum(self.theta[0],upper_bounds), size=(Y_dim,))       # gamma1 strictly pos.
+        # self.gamma1 = rng.uniform(0,self.theta[0], size=(Y_dim,))       # gamma1 strictly pos.
+
 
         # Build b, beta, A, gamma
         self.rebuild_dynamics()                                     # Build b,beta,gamma again.
 
 
     def rebuild_dynamics(self):
-        # Formulas, cf p. 16.
+        # Formulas, cf p. 16. Only Building Q
         self.b = np.zeros(len(self.theta)).reshape((self.m, self.Y_dim))
         self.b[-1,:] = self.theta[-1] * self.kappa[-1]
         self.beta = np.zeros((self.m, self.m))
         for i in range(0,self.m):
-            self.beta[i, i] = - self.kappa[i]
+            self.beta[i, i] = - (self.kappa[i])
             if i + 1 < self.m:
                 self.beta[i, (i+1)] = self.kappa[i] * self.theta[i]
         # Build gamma. unit vec with gamma 1 in first entry.
@@ -1355,34 +1352,38 @@ class LHC_single():
             # Set inital values. Need to comply with (38). enhanced from thm if used in constr
             lambda_i = np.zeros(X_dim)
             for i in range(self.m):
-                if i == self.m - 1:
-                    lambda_i[i] =  rng.uniform(-self.kappa[i]*self.theta[i],
-                                        0.5*(self.kappa[i] - self.kappa[i]*self.theta[i] -
-                                            self.gamma1),size=(1,))
-                else:
-                    lambda_i[i] = rng.uniform(-1,
+                # if i == self.m - 1:
+                #     lambda_i[i] =  rng.uniform(-self.kappa[i]*self.theta[i],
+                #                         0.5*(self.kappa[i] - self.kappa[i]*self.theta[i] -
+                #                             self.gamma1),size=(1,))
+                # else:
+                #     lambda_i[i] = rng.uniform(-1,
+                #                             (self.kappa[i] - self.theta[i]*self.kappa[i] -
+                #                             self.gamma1),size=(1,)) # initialise gamma to comply.
+                lambda_i[i] = rng.uniform(-1,
                                             (self.kappa[i] - self.theta[i]*self.kappa[i] -
-                                            self.gamma1),size=(1,)) # initialise gamma to comply.
-
+                                            self.gamma1),size=(1,))
             # Try lambda to zero.
-            kappa_p =  self.kappa - lambda_i  #rng.uniform(gamma1, 0.99, size=(X_dim,))       # Kappa given
-            theta_p = (self.kappa*self.theta) / kappa_p
-            # Correction for i=ms
-            theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+            # kappa_p =  self.kappa - lambda_i  #rng.uniform(gamma1, 0.99, size=(X_dim,))       # Kappa given
+            # theta_p = (self.kappa*self.theta) / kappa_p
+            # # Correction for i=ms
+            # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
             # theta_p = theta_p + lambda_i / kappa_p
 
             ### New stuff: All the ones needed here e.g. sigma, sigma_Err
             sigma_upper_Q = np.sqrt(2*(self.kappa - self.gamma1 - self.kappa*self.theta))
-            sigma_upper_P = np.sqrt(2*(kappa_p - self.gamma1 - kappa_p*theta_p))
+            sigma_upper_P = np.sqrt(2*(self.kappa - lambda_i - self.gamma1 - self.kappa*self.theta))
             sigma_upper = np.minimum(sigma_upper_Q,sigma_upper_P)
             # Final cond in multi setting. Not holding see B1.
             # Actually feller like cond
-            sigma_thetakap = np.minimum(np.sqrt(2*self.theta[-1]*self.kappa[-1]),np.sqrt(2*theta_p[-1]*kappa_p[-1]))
+            # sigma_thetakap = np.minimum(np.sqrt(2*self.theta[-1]*self.kappa[-1]),np.sqrt(2*theta_p[-1]*kappa_p[-1]))
+            # sigma_thetakap = np.sqrt(2*self.theta[-1]*self.kappa[-1])
             sigma_i = np.zeros(self.m)
             for i in range(0,self.m):
                 # not too sure of lower bounds here...
                 if i == self.m-1:
-                    sigma_i[i] = rng.uniform(0, np.minimum(sigma_thetakap,sigma_upper[i]) , size=(1,))       # Kappa given
+                    # sigma_i[i] = rng.uniform(0, np.minimum(sigma_thetakap,sigma_upper[i]) , size=(1,))       # Kappa given
+                    sigma_i[i] = rng.uniform(0, sigma_upper[i] , size=(1,))       # Kappa given
                 else:
                     sigma_i[i] = rng.uniform(0,sigma_upper[i],size=(1,)) # initialise gamma to comply.
 
@@ -1394,16 +1395,16 @@ class LHC_single():
             delta = self.delta
             tenor = self.tenor
             # Rebuild P parameters.
-            lhc = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
+            lhc = rebuild_lhc_struct(self.kappa, self.theta, gamma1, r, Y_dim, delta, tenor, lambda_i)
 
         else:
             gamma1 = gamma1[0] # due to parametrization
             lambda_i = params[:self.m]
             sigma_i,sigma_err = params[self.m:2*self.m], np.array([params[-1]])
 
-            kappa_p = self.kappa - lambda_i
-            theta_p = (self.kappa*self.theta) / kappa_p
-            theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+            # kappa_p = self.kappa - lambda_i
+            # theta_p = (self.kappa*self.theta) / kappa_p
+            # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
             # theta_p = theta_p + lambda_i / kappa_p
 
             r = self.r
@@ -1411,33 +1412,37 @@ class LHC_single():
             delta = self.delta
             tenor = self.tenor
             # Rebuild P parameters.
-            lhc = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor)
+            lhc = rebuild_lhc_struct(self.kappa, self.theta, gamma1, r, Y_dim, delta, tenor, lambda_i)
 
-        self.lambda_i,self.theta_p, self.kappa_p = lambda_i, theta_p,kappa_p
+        self.lambda_i = lambda_i
         self.sigma, self.sigma_err= sigma_i, sigma_err
 
         return lhc
 
     # Get notmalized drifft stuff.
-    def solve_mu1(self,kappa, theta, gamma1):
+    def solve_mu1(self,kappa, theta, gamma1, lambda_i=None):
+            
         m = len(kappa)
-
+        if lambda_i is None:
+            lambda_i = np.zeros(m)
         def f(mu1):
             prod = 1.0
             for j in range(m):
-                prod *= kappa[j] * theta[j] / (mu1 * gamma1 - kappa[j])
+                prod *= kappa[j] * theta[j] / (mu1 * gamma1 - (kappa[j]-lambda_i[j]))
             return ((-1)**m) * prod - mu1
 
         # Solve only for admissible range
         return brentq(f, 1e-6, 1.0-1e-6)
 
-    def compute_stationary(self,kappa, theta, m, gamma1, mu1):
+    def compute_stationary(self,kappa, theta, m, gamma1, mu1, lambda_i=None):
         mu_process = np.zeros(m)
+        if lambda_i is None:
+            lambda_i = np.zeros(m)
         for i in range(m-1, -1, -1):
             sign = (-1)**(m - (i+1) + 1)
             prod = 1.0
             for j in range(i, m):
-                prod *= kappa[j] * theta[j] / (mu1 * gamma1 - kappa[j])
+                prod *= kappa[j] * theta[j] / (mu1 * gamma1 - (kappa[j]-lambda_i[j]))
             mu_process[i] = sign * prod
         return mu_process
 
@@ -1450,7 +1455,7 @@ class LHC_single():
         if self.m == 1:
             bounds = (
                 [(1e-6, 1)] * m +     # kappa
-                [(1e-6, 1)] * m +     # theta
+                [(0.5, 0.5)] * m +     # eta=theta*gamma1. Same bounds. 
                 [(0.001,1)] +        # gamma1
                 [(-1, 1)]    +         # lambda_p
                 [(1e-6, 1)] * m +     # sigma
@@ -1459,7 +1464,8 @@ class LHC_single():
         else:
             bounds = (
                 [(1e-6, 1)] * m +     # kappa - slightly higher bound
-                [(1e-6, 1)] * m +     # theta
+                [(0.5, 0.5)]  +     # eta=theta*gamma1. Same bounds. 
+                [(1e-6, 1)] * (m-1) +     # theta
                 [(0.001,1)] +        # gamma1
                 [(-1, 1)]  +     # lambda_p
                 [(-1, 1)] *(self.m-1)  +     # lambda_p
@@ -1531,17 +1537,18 @@ class LHC_single():
             params_q = optim_params[:2*m+1]
             lambda_i = params_p[:m]
             kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
+
             # gamma1 = gamma1_p*kappa[0]
             # Update gamma
             # params_q[-1] = params_q[-1] * kappa[0]
 
-            kappa_p  = kappa - lambda_i
-            theta_p = (kappa*theta) / kappa_p
-            theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+            # kappa_p  = kappa - lambda_i
+            # theta_p = (kappa*theta) / kappa_p
+            # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
             # theta_p = theta_p + lambda_i / kappa_p
 
-            lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, self.r, self.Y_dim, self.delta, self.tenor)
-            lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, self.r, self.Y_dim, self.delta, self.tenor)
+            lhc_p = rebuild_lhc_struct(kappa, theta, gamma1, self.r, self.Y_dim, self.delta, self.tenor,lambda_i=lambda_i)
+            lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, self.r, self.Y_dim, self.delta, self.tenor,lambda_i=None)
             
             neg_log_lik, Xn, Zn, Pn = kalmanfilter_opt(optim_params, t_obs,t0,T_M_grid,CDS_obs,
                                                        lhc_p,lhc_q,self.X0)
@@ -1577,7 +1584,7 @@ class LHC_single():
             x0 = np.concatenate([x0_Q,x0_P])
             params_p = x0[2*self.m+1:]
             params_q = x0[:2*self.m+1]
-            lhc_p,kappa_p,theta_p, sigma, sigma_err = build_P_params(params_p,params_q,lhc_p)
+            lhc_p,lambda_i, sigma, sigma_err = build_P_params(params_p,params_q,lhc_p)
             kappa, theta, gamma1 = params_q[:self.m],params_q[self.m:2*self.m], params_q[-1]
 
             # Test several random points.
