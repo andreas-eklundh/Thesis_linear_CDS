@@ -247,6 +247,28 @@ def cds_deriv(lhc, chi, t,t0, t_mat_grid):
     return result
 
 
+## Wrappers for the above to be used in Kalman filter. Avoids t_m + t_m*m comps per loop. 
+@njit
+def cds_fun_mats(prem,prot,chi):
+    prod_prem = prem @ chi # Array of len t_Mats
+    prod_prot = prot @ chi 
+    # Outerprod the way out
+
+    return prod_prot / prod_prem
+
+@njit
+def cds_deriv_mats(prem,prot,chi):
+    prod_prem = prem @ chi # Array of len t_Mats
+    prod_prot = prot @ chi 
+    # Outerprod the way out
+    term1 = prot[:, 1:] / prod_prem[:, None]
+    term2 = (prod_prot / prod_prem**2)[:, None] * prem[:, 1:]
+    result = term1 - term2
+
+    return result
+
+
+
 @njit
 def cds_fun_lin(lhc, chi_m1, t,t0, t_mat_grid):
     (a, c, gamma, b, beta,
@@ -284,7 +306,7 @@ def cds_value(lhc, t,t0, t_mat_grid,CDS_grid):
 
 # standard kalman with previous in denom.
 @njit
-def update_step_cds(X_pred, P_pred, h,h_p, R_k, t_obs,t0, t_mats, lhc, CDS_k):
+def update_step_cds(X_pred, P_pred, h,h_p, R_k, prem,prot, CDS_k):
     pred_Xn = np.append([1],X_pred) # Add one for computations of cds spread and derivative
     # Convert to contingous arrays in case.
     P_pred = np.ascontiguousarray(P_pred)
@@ -293,9 +315,12 @@ def update_step_cds(X_pred, P_pred, h,h_p, R_k, t_obs,t0, t_mats, lhc, CDS_k):
     # Iterated Kalman Filter. For I_max=1 standard.
     I_max = 1
     for i in range(0,I_max):
-        mu_k = h(lhc, pred_Xn, t_obs,t0, t_mats)
+        # mu_k = h(lhc, pred_Xn, t_obs,t0, t_mats)
 
-        H_x = h_p(lhc, pred_Xn, t_obs,t0, t_mats)
+        # H_x = h_p(lhc, pred_Xn, t_obs,t0, t_mats)
+        mu_k = h(prem,prot,pred_Xn)
+
+        H_x = h_p(prem,prot,pred_Xn)
         H_x = np.ascontiguousarray(H_x)
 
         # covariance
@@ -797,11 +822,28 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     # Just an attemt, not to keep.
     P0 = Sigma_prod.copy()
     pred_Pn = P0[1:,1:] # The above is actually the shape of Y,X of legacy reasons.
+   
+    # Compute Psi's for mats. Only prot is a Protection leg is time homogene.
+    psi_prot_mat = np.zeros((n_mat, m+1))
+    psi_prem_mat = np.zeros((n_mat, m+1))
+    for i in range(n_mat):
+        # Pass a scalar from the array X
+        psi_prot_mat[i,:] = psi_prot(lhc_q,t_obs[0],t0[0],T_M_grid[i,0])
+    psi_prot_mat = np.ascontiguousarray(psi_prot_mat)
+    # Verify no change...
+
     # Run algo.
     for n in range(0,n_obs):
+        for i in range(n_mat):
+        # Pass a scalar from the array X
+            psi_prem_mat[i,:] = psi_prem(lhc_q,t_obs[n],t0[n],T_M_grid[i,n])
+        psi_prem_mat = np.ascontiguousarray(psi_prem_mat)
+        # Extended filter optimized.
+        vn,S_k, Xn[n,:], Pn[n,:,:],S_k_inv = update_step_cds(pred_Xn,pred_Pn,cds_fun_mats,cds_deriv_mats,R_k,
+                                                             psi_prem_mat,psi_prot_mat,CDS_obs[n,:])
         # Extended kalman filter.
-        vn,S_k, Xn[n,:], Pn[n,:,:],S_k_inv = update_step_cds(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
-                                                            t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
+        # vn,S_k, Xn[n,:], Pn[n,:,:],S_k_inv = update_step_cds(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
+        #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
         # Unscented Kalman
         # vn,S_k, Xn[n,:], Pn[n,:,:],S_k_inv = ukf_update_step(pred_Xn,pred_Pn,cds_fun,cds_deriv,R_k,
         #                                                     t_obs[n],t0[n],T_M_grid[:,n],lhc_q,CDS_obs[n,:])
@@ -810,7 +852,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
         # ---- 1. state constraint penalty ----
         if np.any(Xn[n, :] < 0) or np.any(Xn[n, :] > 1):
             # clip inside support with small epsilon
-            Xn[n, :] = np.clip(Xn[n, :], 1e-8, 1 - 1e-8)
+            Xn[n, :] = np.clip(Xn[n, :], 1e-10, 1 - 1e-10)
             # penalty += 1e3 * np.sum((Xn[n, :] < 0) | (Xn[n, :] > 1))  # soft penalty
 
         # Compute Zn too - clearly do outside filter.
@@ -1250,7 +1292,8 @@ class LHC_single():
             x0=flat_init, # Maybe initial value is wrong here?
             bounds=bounds,
             constraints=(constraints,),
-            args = (t_obs, T_M_grid, CDS_obs),
+            args = (t_obs[::5],  T_M_grid[:,::5], CDS_obs[::5,:]),
+            # args = (t_obs, T_M_grid, CDS_obs),
             strategy='best1exp',
             popsize=15,
             mutation=(0.7, 1.0),
@@ -1430,13 +1473,16 @@ class LHC_single():
             # x0=x0, # Maybe initial value is wrong here?
             bounds=bounds,
             constraints=(nlc,),
-            args=(t_obs, t0, T_M_grid, CDS_obs,
+            # args=(t_obs, t0, T_M_grid, CDS_obs,
+            #     self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
+            args=(t_obs[::5],t0[::5], T_M_grid[:,::5], CDS_obs[::5,:],
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
+
             strategy='best1exp',
-            popsize=15 ,
+            popsize=20 ,
             mutation=(0.7, 1.0),
             recombination=0.9,
-            maxiter=150, # 400 in prod
+            maxiter=500, # 400 in prod
             # workers=1,
             # updating='immediate',
             workers=-1,
