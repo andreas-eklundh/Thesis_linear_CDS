@@ -1,6 +1,6 @@
 import numpy as np
 import math
-from scipy.optimize import minimize, NonlinearConstraint , Bounds
+from scipy.optimize import minimize, NonlinearConstraint,LinearConstraint , Bounds
 from scipy.stats import norm, ncx2, gamma, expon, uniform
 from scipy.integrate import solve_ivp
 from scipy.linalg import expm
@@ -998,8 +998,6 @@ def nonlinear_constraints( params, m):
     # s.t. smaller than all thetas. 
     # Other constraint in init: that is only for bookkeeping in multivar. Accounted for here
     # in the sigma constraints.
-    # g4 = theta[0] - gamma1
-    # cons.append(g4)
 
     cons = np.asarray(cons, dtype=float)
 
@@ -1024,14 +1022,20 @@ class LHC_single():
         self.a = np.ones((self.Y_dim,1))                                      # Y dim is 1 for LHC
         # Set inital values. Need to comply with (38)
 
-        ### Theta needs to be in (0,1)
-        self.theta = rng.uniform(0.00, 1, size=(X_dim,))       # Theta coeffs
-        self.theta[0] = 0.5
         # Based on that, select kappa freely. But at some magnitude to ensure gamma too.
         self.kappa = rng.uniform(0.1, 1, size=(X_dim,))       # Kappa given
 
         # Then gamma has a constraint. But hold for every combination.
-        self.gamma1 = rng.uniform(0,np.min(self.kappa*(1-self.theta)), size=(Y_dim,))       # gamma1 strictly pos.
+        if self.m == 1:
+            self.gamma1 = rng.uniform(0, self.kappa / (self.kappa+1), size=(Y_dim,))       # gamma1 strictly pos.
+        else:    
+            upper_bounds = np.min((1-self.theta[1:])*self.kappa[1:])
+            self.gamma1 = rng.uniform(0,np.minimum(self.kappa[0] / (self.kappa[0]+1),
+                                                   upper_bounds), size=(Y_dim,))       # gamma1 strictly pos.
+        ### Theta needs to be in (0,1)
+        self.theta = rng.uniform(0.00, 1, size=(X_dim,))       # Theta coeffs
+        self.theta[0] = self.gamma1
+        
         # upper_bounds = np.min((1-self.theta)*self.kappa)
         # self.gamma1 = rng.uniform(0,np.minimum(self.theta[0],upper_bounds), size=(Y_dim,))       # gamma1 strictly pos.
         # self.gamma1 = rng.uniform(0,self.theta[0], size=(Y_dim,))       # gamma1 strictly pos.
@@ -1460,7 +1464,7 @@ class LHC_single():
         if self.m == 1:
             bounds = (
                 [(1e-6, 1)] * m +     # kappa
-                [(0.5, 0.5)] * m +     # eta=theta*gamma1. Same bounds. 
+                [(1e-6, 1)] * m +     # eta=theta*gamma1. Same bounds. 
                 [(0.001,1)] +        # gamma1
                 [(-1, 1)]    +         # lambda_p
                 [(1e-6, 1)] * m +     # sigma
@@ -1469,7 +1473,7 @@ class LHC_single():
         else:
             bounds = (
                 [(1e-6, 1)] * m +     # kappa - slightly higher bound
-                [(0.5, 0.5)]  +     # eta=theta*gamma1. Same bounds. 
+                [(1e-6, 1)]  +     #  
                 [(1e-6, 1)] * (m-1) +     # theta
                 [(0.001,1)] +        # gamma1
                 [(-1, 1)]  +     # lambda_p
@@ -1478,12 +1482,21 @@ class LHC_single():
                 [(1e-6, 0.005)]         # sigma_err
             )
         nlc = NonlinearConstraint(lambda x: nonlinear_constraints(x,self.m), 0, np.inf)
+        theta_index = m   # Index of theta[0]
+        gamma1_index = 2*m  # Index of gamma1[0]
+
+        # 3. Create the constraint A*x = 0
+        #    We want: 1*x[theta_index] - 1*x[gamma1_index] = 0
+        A_matrix = np.zeros(len(bounds))
+        A_matrix[theta_index] = 1.0
+        A_matrix[gamma1_index] = -1.0
+        equality_con = LinearConstraint(A_matrix, lb=0, ub=0)
         # Global optimizer: few iters. Do on supsed only.
         result = differential_evolution(
             func= kalman_wrapper,
             # x0=x0, # Maybe initial value is wrong here?
             bounds=bounds,
-            constraints=(nlc,),
+            constraints=(nlc,equality_con),
             # args=(t_obs, t0, T_M_grid, CDS_obs,
             #     self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
             args=(t_obs[::5],t0[::5], T_M_grid[:,::5], CDS_obs[::5,:],
