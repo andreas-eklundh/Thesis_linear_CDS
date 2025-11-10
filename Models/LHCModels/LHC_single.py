@@ -811,6 +811,10 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     Xn = np.zeros((n_obs,L))
     Zn = np.zeros((n_obs,n_mat))
     Pn = np.zeros((n_obs,L,L))
+
+    # For SE calculations, maintain a log likelihood vector.
+    log_likelihood = np.zeros(n_obs)
+
     # Initial Predictions of means and cov
     # Only criteria on mu1 - mu1 < k/kappa. Set to theta
     mu1 = solve_mu1(kappa, theta, gamma1,lambda_i)
@@ -879,7 +883,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
             + vn.T @ S_k_inv @ vn
         )
 
-        log_likelihood += ll_step #- penalty
+        log_likelihood[n] = ll_step #- penalty
 
 
         if (n < n_obs - 1): # Not sensible to predict further.
@@ -905,7 +909,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
             # pred_Xn, pred_Pn = ukf_predict_step(Xn_n,Pn_n,lhc_p,Delta,Sigma,drift_term)
 
 
-    return - log_likelihood, Xn, Zn, Pn
+    return log_likelihood, Xn, Zn, Pn
 
 @njit
 def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor):
@@ -925,9 +929,10 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
     lhc_p = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor, lambda_i)
     lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, r, Y_dim, delta, tenor, lambda_i=None)
 
-    neg_loglik,_, _, _ = kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0)
+    loglik,_, _, _ = kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0)
 
-    return neg_loglik
+    # return negative log likelihood. 
+    return - np.sum(loglik)
 
 # @njit
 def nonlinear_constraints( params, m):
@@ -1556,8 +1561,11 @@ class LHC_single():
             self.build_P_params(params_p,np.array([gamma1]))
             self.flatten_params()
             self.unflatten_params(params_q)
+            # Get SE
+            kalman_args = (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0)
+            se = self.kalman_SE(params_opt=optim_params,f_args=kalman_args,eps = 1e-9)
 
-            return optim_params, Xn, Zn, Pn
+            return optim_params, Xn, Zn, Pn, se
 
     def run_n_kalmans(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20):
         # Define grid of values.
@@ -1588,10 +1596,33 @@ class LHC_single():
             kappa, theta, gamma1 = params_q[:self.m],params_q[self.m:2*self.m], params_q[-1]
 
             # Test several random points.
-            optim_params,  Xn,Zn, Pn= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0, base_seed=base_seed + i)
-
+            optim_params,  Xn,Zn, Pn,se= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0, base_seed=base_seed + i)
         # Set new optimal parameters.
-        return  optim_params,  Xn,Zn, Pn
+        return  optim_params,  Xn,Zn, Pn,se
+
+
+    ### Standar error calculation. Run outside as comp needed for each 
+    def kalman_SE(self,params_opt,f_args, eps=1e-9):
+        (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0) =  f_args 
+        ll_0, *_ = kalmanfilter_opt(params_opt,t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0)
+        n = len(ll_0)
+        se = np.zeros((params_opt.shape[0],params_opt.shape[0]))
+        g = np.zeros((n, params_opt.shape[0]))
+        for j in range(len(params_opt)):
+            e = np.zeros_like(params_opt)
+            e[j] = eps
+            # Run filter. Yields Shifted ll for each obs date.
+            right_end,_,_,_ =  kalmanfilter_opt(params_opt+e, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0) 
+            left_end,_,_,_ =  kalmanfilter_opt(params_opt-e, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0)
+            g[:,j] = (right_end- left_end) / (2*eps)
+            # Then compute standard error exact for kalman filter
+        
+        # Then loop over dates to compute SE
+        for date in  range(n):
+            se += np.linalg.pinv(np.outer(g[date,:], g[date,:])/n)
+        se = se / n
+        se_vec = np.sqrt(np.diag(se))
+        return se_vec
 
     # Transform Kalman Z parameters:
     def kalman_X_Y(self,t_obs,Z):
