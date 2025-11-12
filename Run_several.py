@@ -146,7 +146,7 @@ if __name__ == "__main__":
 
 
         # Negative process. Multiply by -1 everywhere. Let A and a get these too.
-        for X_dim in [1]:# , 2]:
+        for X_dim in [1,2,3]:# , 2]:
             cir = CIRIntensity(r,delta,tenor,X_dim)
             x0 = np.array([0])
             params, Xn,Zn,Pn,se = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=2000)

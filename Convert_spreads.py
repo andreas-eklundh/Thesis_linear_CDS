@@ -15,9 +15,8 @@ if __name__ == "__main__":
     #### Now callibrate and store each rate to get eficiently a surface:
     #### Preliminary investigation. 
     sub_df = pd.read_excel("./Data/subset_data.xlsx")
-    firms = ['BBVSM', 'BNP','CMZB','DANBNK','DB', 'HSBC', 'USPA']
-    # firms = ['DANBNK','DB', 'HSBC', 'USPA']
-    firms = ['DANBNK']
+    # firms = ['CMZB','DANBNK','MONTE', 'SVSKHB']
+    firms = ['MONTE']
 
     # Loop over each firm in list.
     for firm in firms:
@@ -29,8 +28,8 @@ if __name__ == "__main__":
 
         t = np.array(test_df['Years'])
 
-        # mat_grid = np.array([1,3,5,7,10])
-        mat_grid = np.array([5])
+        mat_grid = np.array([1,3,5,7,10])
+        # mat_grid = np.array([5])
         t0 = 0.0
         t_mats = np.concatenate(([t0], mat_grid))
 
@@ -40,18 +39,19 @@ if __name__ == "__main__":
         # Payments are then every 0.25 year.     
 
         # Get payment grids of quarterly.
-        # CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
-        CDS_obs = np.array(test_df[['5Y']].ffill().bfill())
+        CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
+        # CDS_obs = np.array(test_df[['5Y']].ffill().bfill())
         model = DeterministicGamma(r, delta, tenor)
 
         # RUN LATER - MORE CONSUMING
         # Generate synthetic "market" CDS values (set to zero at par spread condition)
         
         # To have some grid to plot.
-        plot_grid = np.array([i *0.5 for i in range(int(np.max(mat_grid)/0.5)+ 1)])    
+        plot_grid = np.array([i *0.2 for i in range(int(np.max(mat_grid)/0.2)+ 1)])    
         Gamma, survival = np.zeros((CDS_obs.shape[0], plot_grid.shape[0])),np.zeros((CDS_obs.shape[0], plot_grid.shape[0]))
         cali_params = np.zeros((CDS_obs.shape[0], mat_grid.shape[0]))
         for t_idx in range(CDS_obs.shape[0]):
+            # Loop over time points
             # Generate necessary values:        
             # Calibrate back hazard rates
             t_grid_payments = np.array([tenor*i for i in range(int(np.max(mat_grid)/tenor)+1)])   
@@ -59,11 +59,12 @@ if __name__ == "__main__":
             cali_params[t_idx, : ] = model.calibrate_deterministic(CDS_obs[t_idx,:] , mat_grid, 0.0, t_grid_payments)
             # Generate the survial probabilities/survival process
             for i in range(plot_grid.shape[0]):
+                # Get integrated process for each plot grid points. Is over maturities.
                 Gamma[t_idx,i] = model.Gamma_fun(cali_params[t_idx, : ] , 
                                                  plot_grid[i],t_mats)
-                survival[t_idx,i] = np.exp(-Gamma[t_idx,i] )
                 
             print(f'Done implied {(t_idx+1)/CDS_obs.shape[0]}, {firm}')
+        survival = np.exp(-Gamma )
 
         save_path = f"./Gamma_Calibration/{firm}/"   # <--- change to your path
         os.makedirs(save_path, exist_ok=True)
@@ -102,7 +103,7 @@ if __name__ == "__main__":
         # Generate synthetic "market" CDS values (set to zero at par spread condition)
         
         # To have some grid to plot.
-        plot_grid = np.array([i *0.5 for i in range(int(np.max(mat_grid)/0.5)+ 1)])    
+        plot_grid = np.array([i *0.2 for i in range(int(np.max(mat_grid)/0.2)+ 1)])    
         #### Break look so above is just a 'oneoff'
         data = np.load(f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/{firm}/Data_{firm}.npz")
         t_mats_plots = data['t_mats_plots']

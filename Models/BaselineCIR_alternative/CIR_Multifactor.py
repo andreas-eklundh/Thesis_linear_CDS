@@ -33,40 +33,45 @@ class CIRIntensity():
                 rng = np.random.default_rng(seed)  # independent each time
             # Default (short/med) factors
             self.kappa = rng.uniform(0.2, 0.8, size=(X_dim,))
+            # Order. Mainly for identification to make sense. 
+            self.kappa = np.sort(self.kappa)
             self.theta = rng.uniform(0.01, 0.1, size=(X_dim,))
 
             # Initiate MPR specification. Use positivity bound for positive.
-            self.lambda_i = np.zeros(X_dim) 
+            self.lambda1 = np.zeros(X_dim) 
             for i in range(X_dim):
-                self.lambda_i[i] = rng.uniform(-self.theta[i]*self.kappa[i], self.kappa[i], 1) 
-                # self.lambda_i[i] = rng.uniform(-1, self.kappa[i], 1) 
+                self.lambda1[i] = rng.uniform(-1, self.kappa[i], 1) 
 
-            # initialise all positive.
-            self.kappa_p = self.kappa - self.lambda_i
-            # self.theta_p = (self.theta *self.kappa +self.lambda_i ) / self.kappa_p
-            self.theta_p = (self.theta *self.kappa +self.lambda_i ) / self.kappa_p
-
+            # initialise all positive. Note one can plug in same lambda is simplicity needed
+            self.kappa_p,self.theta_p = self.build_P_drift(self.lambda1,np.zeros_like(self.lambda1))
             # Set sigma in feller grid.
             # Sigma to be in minimum of feller conds.
-            feller_min = np.minimum(np.sqrt(2*self.kappa*self.theta),
-                                    np.sqrt(2*self.kappa_p*self.theta_p))
+            feller_min = np.minimum(np.sqrt(2*self.kappa*self.theta),np.sqrt(2*self.kappa_p*self.theta_p))
             self.sigma = rng.uniform(0.001, feller_min, size=(X_dim,))
             # Again, initialise with relatively low error. 
-            self.sigma_err = rng.uniform(0.00001, 0.0001, size=(1,))
+            self.sigma_err = rng.uniform(0.0001, 0.001, size=(1,))
 
 
         else:
             # Else, asusming some paramter tuning, set then here.
-            self.kappa, self.theta, self.sigma,self.lambda_i,self.sigma_err = self.unpack_params(params)
-            self.kappa_p = self.kappa - self.lambda_i
-            self.theta_p = (self.theta *self.kappa + self.lambda_i) / self.kappa_p
-            # self.theta_p = (self.theta *self.kappa ) / self.kappa_p
+            self.kappa, self.theta, self.sigma,self.lambda1,self.sigma_err = self.unpack_params(params)
+            self.kappa_p,self.theta_p = self.build_P_drift(self.lambda1,np.zeros_like(self.lambda1))
 
+
+    def build_P_drift(self,lambda1,lambda2, kappa=None, theta=None):
+            if (kappa is None) & (theta is None):
+                kappa = self.kappa
+                theta = self.theta
+            # This is the kappas and thetas under the new specification. 
+            kappa_p = kappa - lambda1
+            theta_p = (theta *kappa +lambda2 ) / kappa_p
+            return kappa_p, theta_p
+    
     def unpack_params(self,params):
         X_dim = self.X_dim
         kappa, theta, sigma = params[:X_dim],params[X_dim:2*X_dim],params[2*X_dim:3*X_dim]
-        lambda_i, sigma_err = params[3*X_dim:4*X_dim], np.array([params[-1]])
-        return kappa,theta,sigma,lambda_i,sigma_err
+        lambda1, sigma_err = params[3*X_dim:4*X_dim], np.array([params[-1]])
+        return kappa,theta,sigma,lambda1,sigma_err
     #### Solve affine equations.
 
     # For reference, also the solution in Lando (2004).
@@ -74,7 +79,7 @@ class CIRIntensity():
 
     def cir_solution(self,params,x0,T,rho=1,corr=False):
         # Local copies of kappa, theta to minimize code. Rename to comply with Lando.
-        kappa,theta,sigma1,lambda_i,sigma_err = self.unpack_params(params)
+        kappa,theta,sigma1,lambda1,sigma_err = self.unpack_params(params)
         gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
         # If x0 is one dimensional (intensity), use Lando forthetalas
         
@@ -128,7 +133,7 @@ class CIRIntensity():
 
     def cir_derivatives(self,params,x,T,rho=1, corr=False):
         # Can work in 
-        kappa,theta,sigma1,lambda_i,sigma_err = self.unpack_params(params)
+        kappa,theta,sigma1,lambda1,sigma_err = self.unpack_params(params)
         gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
         if corr == False:
             if isinstance(T,float):
@@ -278,10 +283,8 @@ class CIRIntensity():
     # Kalman filtering.
     def Kalman(self,params,t_obs, t_mat_grid, Y, result = False):
         print(params)
-        kappa,theta,sigma,lambda_i,sigma_err = self.unpack_params(params)
-        kappa_p = kappa - lambda_i
-        theta_p = (theta * kappa + lambda_i ) / kappa_p
-        # theta_p = (theta * kappa  ) / kappa_p
+        kappa,theta,sigma,lambda1,sigma_err = self.unpack_params(params)
+        kappa_p,theta_p = self.build_P_drift(lambda1,np.zeros_like(self.lambda1),kappa,theta)
         # Stop optimization if bad initial params.
         # positivity constraints (soft bounds)
         # if np.any(params <= 0):
@@ -304,7 +307,7 @@ class CIRIntensity():
 
         # Long term mean for each of the processes.
         alpha = 2 * kappa_p* theta_p / sigma**2
-        beta = 2 *kappa_p / sigma**2
+        beta = 2 *(kappa_p) / sigma**2
         # CIR values.
         X0 = alpha / beta
         P0 = alpha / beta**2
@@ -314,6 +317,7 @@ class CIRIntensity():
         Xn = np.zeros((L))
         Zn = np.zeros((n_mat))
         Pn = np.zeros((L,L))
+        log_likelihood = np.zeros(n_obs)
         if result == True:
             Xn_out = np.zeros((n_obs,L))
             Zn_out = np.zeros((n_obs,n_mat))
@@ -323,10 +327,9 @@ class CIRIntensity():
         pred_Pn  = ( np.identity(self.X_dim) * P0).reshape((self.X_dim,self.X_dim))
         Delta = t_obs[1] - t_obs[0] # Only apprx for now. Move to loop maybe.
 
-        log_likelihood = 0
         # Run algo.
         x0_zcb = np.zeros(self.X_dim)
-        kappa_P_diag = np.identity(self.X_dim) * kappa_p
+        kappa_P_diag = np.identity(self.X_dim) * (kappa_p)
 
         # To speed up, solve ricatti equations. Will be time homogenous.
         # Solve Ricatti Equations. Might move inside loop later - MUCH FASTER OUT HERE, IF SAME DIST APPROX.
@@ -334,27 +337,21 @@ class CIRIntensity():
         deltas = np.array([t_obs[i] - t_obs[i-1] for i in range(1,t_obs.shape[0])])
         unique_delta = np.unique(np.round(deltas,7))
         # Precalculate A and b prior to.
-        a_A = []
-        for i in range(0,unique_delta.shape[0]):
-            a,A =  self.cir_solution(params,x0 = x0_zcb,T = t_mat_grid[:,0] - t_obs[0])
-            a,A = -a,-A
-            a_A.append([a,A])
+        a,A =  self.cir_solution(params,x0 = x0_zcb,T = t_mat_grid[:,0] - t_obs[0])
+        a,A = -a,-A
 
         # Utilize that we can compute this up front.
         # Create arrays based on obs.
-        phi_0 = (np.identity(kappa_P_diag.shape[0])-expm(-kappa_P_diag * Delta)) @ theta_p
-        phi_X = expm(-kappa_P_diag * Delta)
-
+        phis = []
+        for i in range(0,unique_delta.shape[0]):
+            phi_0 =  (np.identity(kappa_P_diag.shape[0])-expm(-kappa_P_diag * unique_delta[i])) @ theta_p
+            phi_1 =  expm(-kappa_P_diag * unique_delta[i])
+            phis.append([phi_0,phi_1])
         for n in range(0,n_obs):
             # Special first case
-            if n==0:
-                delta_curr = unique_delta[0]
-                delta_idx = np.argmax(delta_curr == unique_delta)
-                a = a_A[int(delta_idx)][0]
-                A = a_A[int(delta_idx)][1]
             # UPDATE STEP
             Zn, vn,S_k, Xn, Pn = self.Update_step(pred_Xn,pred_Pn,A,a,Sigma,Y[n,:])
-            Xn = np.maximum(Xn,1e-6) # Truncate Xn
+            Xn = np.maximum(Xn,1e-10) # Truncate Xn
             # punish hashly if Xn below zero (mainly i). 
 
             if result == True:
@@ -362,41 +359,68 @@ class CIRIntensity():
                 Zn_out[n,:] = A @ Xn + a
                 Pn_out[n,:,:] = Pn
 
-            # Update log likelihood.
-            det_S = np.linalg.det(S_k)
-            if det_S < 0:
-                return 1e12 #,Xn, Zn, Pn 
 
+            # Use log determinant
+            det_S = np.linalg.det(S_k)
             # Some fallback / numerical fixes
             if (np.isnan(det_S)) | (det_S < 1e-12) :
                 S_inv = np.linalg.pinv(S_k)
             else:
                 S_inv = np.linalg.inv(S_k) 
+            # ---- 3. safe inverse / logdet ----
+            sign, logdet = np.linalg.slogdet(S_k)
+            if sign <= 0:
+                # Introduce slight bias. 
+                logdet = np.log(np.abs(det_S) + 1e-12)
 
-            log_likelihood += - 0.5 * (S_k.shape[0] * np.log(2*np.pi) + np.log(det_S) +
+
+            log_likelihood[n] = - 0.5 * (S_k.shape[0] * np.log(2*np.pi) +logdet +
                                         vn.T @ S_inv @ vn
             )
 
             # Use CIR Variance for this (not going to need it)
             if (n < n_obs - 1): # Not sensible to predict further.
                 # Works for Uncorrelated and indep noise.
-                Q_t = (sigma**2 * theta_p * (1-np.exp(-kappa_p * Delta))**2 / (2 * kappa_p) +
-                        Xn * sigma**2 * (np.exp(-kappa_p * Delta) - np.exp(-2*kappa_p * Delta))/ kappa_p)
+                Q_t = (sigma**2 * theta_p * (1-np.exp(-(kappa_p) * Delta))**2 / (2 * (kappa_p)) +
+                        Xn * sigma**2 * (np.exp(-(kappa_p) * Delta) - np.exp(-2*(kappa_p) * Delta))/ (kappa_p))
                 Q_t = np.diag( Q_t.flatten())
 
                 Delta = t_obs[n+1] - t_obs[n]
                 delta_curr = np.round(Delta,7)
                 delta_idx = np.argmax(delta_curr == unique_delta)
-                a = a_A[int(delta_idx)][0]
-                A = a_A[int(delta_idx)][1]
+                phi_0 = phis[int(delta_idx)][0]
+                phi_X = phis[int(delta_idx)][1]
                 # The prediction step effectively assumes normality. 
                 pred_Xn, pred_Pn = self.Prediction_step(Xn,Pn,phi_X,phi_0,Q_t)
                 # Ensure positivity.
                 pred_Xn = np.maximum(pred_Xn, 1e-6)
         if result == True:
-            return Xn_out,Zn_out, Pn_out
+            return  log_likelihood, Xn_out,Zn_out, Pn_out
         else:
-            return -log_likelihood
+            return -np.sum(log_likelihood)
+
+    ### Standar error calculation. Run outside as comp needed for each 
+    def kalman_SE(self, params, t_obs, t_mat_grid, Y,result,eps=1e-9):
+        se = np.zeros((params.shape[0],params.shape[0]))
+        ll_0, *_ = self.Kalman(params, t_obs, t_mat_grid, Y,result)
+        n = ll_0.shape[0]
+        g = np.zeros((n, params.shape[0]))
+        for j in range(params.shape[0]):
+            e = np.zeros(params.shape[0])
+            e[j] = eps
+            # Run filter. Yields Shifted ll for each obs date.
+            # In this model return - f as f already returns neg log lik.
+            right_end, *_ =  self.Kalman(params+e, t_obs, t_mat_grid, Y,result) 
+            left_end, *_  =  self.Kalman(params-e, t_obs, t_mat_grid, Y,result)
+            g[:,j] = (right_end- left_end) / (2*eps)
+            # Then compute standard error exact for kalman filter
+        
+        # Then loop over dates to compute SE
+        for date in  range(n):
+            se += np.linalg.pinv(np.outer(g[date,:], g[date,:])/ n)
+        se = se / n
+        se_vec = np.sqrt(np.diag(se))
+        return se_vec
 
 
     def feller_constraint(self,params):
@@ -405,12 +429,10 @@ class CIRIntensity():
         kappa     = params[0:d]
         theta     = params[d:2*d]
         sigma     = params[2*d:3*d]
-        lambda_i   = params[3*d:4*d]
+        lambda1   = params[3*d:4*d]
         sigma_err = params[-1]
 
-        kappa_p = kappa - lambda_i
-        theta_p = (theta * kappa + lambda_i) / kappa_p
-        # theta_p = (theta * kappa ) / kappa_p
+        kappa_p,  theta_p = self.build_P_drift(lambda1,np.zeros_like(self.lambda1),kappa,theta)
 
         cons = []
 
@@ -420,25 +442,17 @@ class CIRIntensity():
         feller = 2*prod_min - sigma**2  # vector length d
         cons.append(feller)
         # Constraint on lambda.
-        
-        for i in range(kappa.shape[0]):
-            g3 = kappa[i] - lambda_i[i]
-            cons.append(g3)
-            g4 = lambda_i[i] + kappa*theta 
-            cons.append(g4)
-        
-        # for i in range(kappa.shape[0]):
-        #     g3 = kappa[i] - lambda_i[i]
-        #     cons.append(g3)
-            # if lambda_i[i] > 0:
-            #     g3 = kappa[i] - lambda_i[i]
-            #     cons.append(g3)
-            # else: 
-            #     g3 = kappa[i] * theta[i] + lambda_i[i]
-            #     cons.append(g3)
+        g3 = kappa - lambda1
+        cons.append(g3)
+        # g4 = lambda1 + kappa*theta 
+        # cons.append(g4)
+        # add identification constraint. Kappas decreasing.
+        g5 = np.asarray(kappa[1:]-(kappa[:-1]+1e-3)).flatten() # kappai >= kappa_{i-1}
+        cons.append(g5)
 
+        
         # concatenate both
-        return np.concatenate([feller])  # length 2*d
+        return np.concatenate(cons)  # length 2*d
 
     # Optimizer function.
     def run_kalman_filter(self, t_obs,t_mat_grid,Y,seed=1000):
@@ -446,7 +460,7 @@ class CIRIntensity():
 
         # Get initial values. Z
         x0 = np.concatenate([self.kappa, self.theta, self.sigma, 
-                             self.lambda_i,self.sigma_err])
+                             self.lambda1,self.sigma_err])
         x0 = x0.flatten()
 
         # Try a different optimizer than nelder mead
@@ -456,8 +470,8 @@ class CIRIntensity():
             [(1e-6, 2)] * d +     # kappa
             [(1e-6, 2)] * d +     # theta
             [(1e-6, 1)] * d +     # sigma (assuming per-factor vol)
-            [(-1, 1)] * d +     # lambda
-            [(1e-6, 0.0001)]         # sigma_err
+            [(-1, 1)] * d +     # lambda1
+            [(1e-6, 0.001)]         # sigma_err
         )
         nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
 
@@ -479,29 +493,29 @@ class CIRIntensity():
 
         # If DE failed or hit constraint penalties, bail early
         if result.fun >= 1e12:
-            return result.x, 0, 0, 0
+            return result.x, 0, 0, 0,0
 
         # --- Local Refinement ---
 
-        # polish_result = minimize(
-        # fun=self.Kalman,
-        #     x0=result.x,  # <-- Use DE's best solution as the start
-        #     args=(t_obs, t_mat_grid, Y),
-        #     method='COBYLA',
-        #     constraints=(nonlinear_constraint,), # <-- Pass the same nonlinear constraints
-        #     options={
-        #         'disp': True,
-        #         'maxiter': 500  # Give it a reasonable number of iterations
-        #     }
-        # )
-        # not doing it. slow and yields very little.
+        polish_result = minimize(
+        fun=self.Kalman,
+            x0=result.x,  # <-- Use DE's best solution as the start
+            args=(t_obs, t_mat_grid, Y),
+            method='trust-constr',
+            bounds = bounds,
+            constraints=(nonlinear_constraint,), # <-- Pass the same nonlinear constraints
+            options={
+                'disp': True,
+                'maxiter': 500  # Give it a reasonable number of iterations
+            }
+        )
 
-        params = result.x
-        self.kalman_obj  = result.fun
+        params = polish_result.x
+        self.kalman_obj  = polish_result.fun
         # Run and return solution
-        Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
-
-        return params , Xn,Zn,Pn
+        log_likelihood,Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
+        se = self.kalman_SE(params,t_obs=t_obs, t_mat_grid=t_mat_grid, Y=Y,result=True)
+        return params , Xn,Zn,Pn,se
     
     def run_n_kalman(self, t_obs,t_mat_grid,Y,base_seed=1000,n_restarts=5):
         # Define grid of values. 
@@ -600,11 +614,11 @@ class CIRIntensity():
     # Simulation will likely also be th eway to go about expression in Filipovic (tedious)
     def simulate_intensity(self, lambda0,T,M,scheme,seed=1000, measure = 'Q'):
         if measure == 'Q':
-            theta = self.theta
             kappa = self.kappa
+            theta = self.theta
         elif measure == 'P':
-            theta = self.theta_p
             kappa = self.kappa_p
+            theta = self.theta_p
         # Do baseline calculations
         delta = T / M
         X_dim = lambda0.shape[0]
@@ -628,14 +642,14 @@ class CIRIntensity():
                 sigma_t = sigma_mat *  np.sqrt(path_prev)
                 sigma_prime_t = sigma_mat * 1/(2*np.sqrt(path_prev))
                 path[i,:] = path_prev+ delta*mu_t +  np.sqrt(delta) * sigma_t @ W[i-1,:]+ 1/2 * delta* sigma_prime_t @ sigma_t @ (W[i-1,:]**2-1)
-        elif scheme == "Exact":
-            # TODO: Correct this.
-            for i in range(1,M+1):
-                path_prev = np.maximum(path[i-1,:], 0) # Clip to have valid sqrt
-                k = 4 * kappa * theta / (self.sigma**2)
-                l = 4 * kappa * np.exp(-kappa * T_return[i]) / (self.sigma**2 * (1-np.exp(-kappa *T_return[i]))) * path[i-1]
-                factor = self.sigma**2 * (1 - np.exp(-kappa * T_return[i])) / (4*kappa)
-                path[i] = factor * ncx2.rvs(df = k, nc = l, random_state = seed)
+        # elif scheme == "Exact":
+        #     # TODO: Correct this.
+        #     for i in range(1,M+1):
+        #         path_prev = np.maximum(path[i-1,:], 0) # Clip to have valid sqrt
+        #         k = 4 * self.kappa * self.theta / (self.sigma**2)
+        #         l = 4 * self.kappa * np.exp(-self.kappa * T_return[i]) / (self.sigma**2 * (1-np.exp(-self.kappa *T_return[i]))) * path[i-1]
+        #         factor = self.sigma**2 * (1 - np.exp(-self.kappa * T_return[i])) / (4*self.kappa)
+        #         path[i] = factor * ncx2.rvs(df = k, nc = l, random_state = seed)
 
         return T_return, path
     

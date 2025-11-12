@@ -25,21 +25,19 @@ def print_model_params(name, final_param, m):
         kappa = final_param[idx:idx + m]; idx += m
         theta = final_param[idx:idx + m]; idx += m
         gamma1 = final_param[idx]; idx += 1
-        kappa_p = final_param[idx:idx + m]; idx += m
-        # theta_p = final_param[idx:idx + m]; idx += m
+        lambda_i = final_param[idx:idx + m]; idx += m
         sigma = final_param[idx:idx + m]; idx += m
         sigma_err = final_param[idx] if idx < len(final_param) else np.nan
 
         print("κ      =", np.round(kappa, 4))
         print("θ      =", np.round(theta, 4))
         print("γ₁     =", np.round(gamma1, 4))
-        print("κ_pʹ     =", np.round(kappa_p, 4))
-        # print("θ_pʹ     =", np.round(theta_p, 4))
+        print("lambda     =", np.round(lambda_i, 4))
         print("σ      =", np.round(sigma, 4))
         print("σ_err  =", np.round(sigma_err, 6))
         print()
 
-    elif name == 'LHC Baseline':
+    elif name == 'LHC Filipovic':
         idx = 0
         kappa = final_param[idx:idx + m]; idx += m
         theta = final_param[idx:idx + m]; idx += m
@@ -55,15 +53,13 @@ def print_model_params(name, final_param, m):
         kappa = final_param[idx:idx + m]; idx += m
         theta = final_param[idx:idx + m]; idx += m
         sigma = final_param[idx:idx + m]; idx += m
-        kappa_p = final_param[idx:idx + m]; idx += m
-        # theta_p = final_param[idx:idx + m]; idx += m
+        lambda_i = final_param[idx:idx + m]; idx += m
         sigma_err = final_param[idx] if idx < len(final_param) else np.nan
 
         print("κ      =", np.round(kappa, 4))
         print("θ      =", np.round(theta, 4))
         print("σ      =", np.round(sigma, 4))
-        print("κ_pʹ     =", np.round(kappa_p, 4))
-        # print("θ_pʹ     =", np.round(theta_p, 4))
+        print("lambda     =", np.round(lambda_i, 4))
         print("σ_err  =", np.round(sigma_err, 6))
         print()
 

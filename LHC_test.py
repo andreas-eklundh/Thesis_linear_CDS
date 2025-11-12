@@ -66,7 +66,7 @@ lhc.initialise_LHC(Y_dim=1,X_dim=2,X0=0.5,rng=None)
 
 
 # Test several random points. 
-out_params= lhc.optimal_parameter_set(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs,n_restarts=5)
+out_params= lhc.optimize_params(t_obs=t,T_M_grid=t_mat_grid,CDS_obs=CDS_obs)
 
 ## Should include a function for optimizing base on say 5 differetn random points or more.
 # And then take the best.

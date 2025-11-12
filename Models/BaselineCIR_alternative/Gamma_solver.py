@@ -173,7 +173,7 @@ class DeterministicGamma:
                 # trial params: existing + lam for this interval, zeros afterwards
                 trial = params + [lam] + [0.0] * (n - j - 1)
                 I1, I2, prot = self.get_CDS_deterministic(t0, t0, T, trial, t_grid_payments, t_mats)
-                return cds_obs[j] * (I1 + I2) - prot
+                return prot - cds_obs[j] * (I1 + I2)
                 #return cds_obs[j] * (I1 ) - prot
 
             # bracket search for brentq: expand upper bound until sign change or limit

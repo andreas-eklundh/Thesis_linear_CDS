@@ -28,7 +28,7 @@ data = data.rename(columns = {'ConvSpreard':'ConvSpread'})
 # data_mod['Tenor_plot'] = data_mod["tenor_months"].apply(lambda x: str(x))+str("M = ")+data_mod['Tenor'] 
 
 # Only interested in Tenors in years. 
-data_mod = data.groupby(['Date', 'Ticker', 'Tenor']).mean('ConvSpread').reset_index()
+data_mod = data.groupby(['Date', 'Ticker', 'Tenor']).mean('Par Spread').reset_index()
 data_mod = data_mod[data_mod['Tenor'].str.contains('Y')]
 
 tickers = data_mod['Ticker'].unique()
@@ -41,18 +41,18 @@ for ticker in tickers:
 
     # Pivot to make each tenor a column
     df_ticker = df_ticker.sort_values(by = ['Tenor_int'])
-    pivot = df_ticker.pivot(index='Date', columns='Tenor_int', values='ConvSpread')
+    pivot = df_ticker.pivot(index='Date', columns='Tenor_int', values='Par Spread')
 
     # Plot
     pivot.plot(figsize=(12, 6), title=f"Spread Time Series for {ticker}")
     plt.xlabel("Date")
-    plt.ylabel("Conv Spread")
+    plt.ylabel("Par Spread")
     plt.legend(title="Tenor (Y)", loc="upper left")
     plt.grid(True)
     plt.tight_layout()
 
     # Save plot
-    plt.savefig(f"./Spreads_obs/{ticker}_convspread.png")
+    plt.savefig(f"./Spreads_obs/{ticker}_parspread.png")
     plt.close()
 
 
@@ -70,9 +70,8 @@ test_df.to_excel("./Data/test_data.xlsx", index=False)
 
 ## subset more data
 # lis tto keep
-firms = ['BBVSM', 'BNP','CMZB','DANBNK','DB', 'HSBC', 'USPA']
+firms = ['CMZB','DANBNK','MONTE', 'SVSKHB']
 sub_df = data_mod[(data_mod['Ticker'].isin(firms)) ]
-
 sub_df.to_excel("./Data/subset_data.xlsx", index=False) 
 
 # Reshape and make into array. 
