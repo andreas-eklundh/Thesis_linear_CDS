@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.optimize import minimize, NonlinearConstraint, Bounds
-
+from scipy.interpolate import CubicSpline
 from numba import njit, float64, int64
 from Models.ATSMGeneral.ATSM import ATSM
 from Models.BaselineCIR_alternative.CIR_numba import calc_cds
@@ -14,11 +14,12 @@ from scipy.optimize import differential_evolution
 
 ## Class to actually call
 class CIRIntensity():
-    def __init__(self, r, delta, tenor,X_dim=1):
+    def __init__(self, r, delta, tenor,X_dim=1,cascading=False):
         self.r = r
         self.delta = delta
         self.tenor = tenor
         self.X_dim = X_dim
+        self.cascading = cascading
         # Set parameters randomly at first, but so something is present.
         self.set_params(params = None)
 
@@ -40,10 +41,10 @@ class CIRIntensity():
             # Initiate MPR specification. Use positivity bound for positive.
             self.lambda1 = np.zeros(X_dim) 
             for i in range(X_dim):
-                self.lambda1[i] = rng.uniform(-1, self.kappa[i], 1) 
+                self.lambda1[i] = rng.uniform(-self.kappa[i]*self.theta[i], self.kappa[i], 1) 
 
             # initialise all positive. Note one can plug in same lambda is simplicity needed
-            self.kappa_p,self.theta_p = self.build_P_drift(self.lambda1,np.zeros_like(self.lambda1))
+            self.kappa_p,self.theta_p = self.build_P_drift(self.lambda1,self.lambda1)
             # Set sigma in feller grid.
             # Sigma to be in minimum of feller conds.
             feller_min = np.minimum(np.sqrt(2*self.kappa*self.theta),np.sqrt(2*self.kappa_p*self.theta_p))
@@ -55,7 +56,7 @@ class CIRIntensity():
         else:
             # Else, asusming some paramter tuning, set then here.
             self.kappa, self.theta, self.sigma,self.lambda1,self.sigma_err = self.unpack_params(params)
-            self.kappa_p,self.theta_p = self.build_P_drift(self.lambda1,np.zeros_like(self.lambda1))
+            self.kappa_p,self.theta_p = self.build_P_drift(self.lambda1,self.lambda1)
 
 
     def build_P_drift(self,lambda1,lambda2, kappa=None, theta=None):
@@ -77,13 +78,14 @@ class CIRIntensity():
     # For reference, also the solution in Lando (2004).
     # Potentially more handystable (numba). Default is rho=1 as it will be the one we use (maybe?)
 
-    def cir_solution(self,params,x0,T,rho=1,corr=False):
+
+    def cir_solution(self,params,x0,T,rho=1):
         # Local copies of kappa, theta to minimize code. Rename to comply with Lando.
         kappa,theta,sigma1,lambda1,sigma_err = self.unpack_params(params)
         gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
         # If x0 is one dimensional (intensity), use Lando forthetalas
         
-        if (corr == False) & (np.all(np.isreal(x0))):
+        if (self.cascading  == False) & (np.all(np.isreal(x0))):
             if isinstance(T,float):
                 T_size = 1
             else:
@@ -114,28 +116,37 @@ class CIRIntensity():
 
 
         # If correlation or dgeneral solutions:
+        # This we set to the cascading version like the LHC model.
         else:
             # Build matrices for Afine term structure models.
-            K0 = np.identity(self.X_dim) * kappa @ theta
+            K0 = np.zeros(self.X_dim)
+            K0[-1] = kappa[-1] * theta[-1]
+            # K0 = kappa * theta
+
             K1 = - np.identity(self.X_dim) * kappa
+            for i in range(self.X_dim):
+                if i + 1 < self.X_dim:
+                    K1[i, i+1] = kappa[i] * theta[i]
+            
+            # Non diagonal entries.
             H0 = np.zeros((self.X_dim,self.X_dim ))
             H1 = np.zeros((self.X_dim,self.X_dim,self.X_dim))
             for i in range(self.X_dim):
                 H1[i,i,i] = sigma1[i]**2
-            # Just assume first factor is default intensity.
-            rho1 = np.ones(self.X_dim)
-            # rho1[0] = 1
+            # Just assume first factor is default intensity in cascading. Mimic LHC
+            rho1 = np.zeros(self.X_dim)
+            rho1[0] = 1
 
             atsm = ATSM(K0,K1,H0,H1,rho0=0,rho1=rho1)
             atsm.solve_ODE_system(x0,0,T)
 
             return atsm.alpha,atsm.beta.T
 
-    def cir_derivatives(self,params,x,T,rho=1, corr=False):
+    def cir_derivatives(self,params,x,T,rho=1):
         # Can work in 
         kappa,theta,sigma1,lambda1,sigma_err = self.unpack_params(params)
         gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
-        if corr == False:
+        if self.cascading == False:
             if isinstance(T,float):
                 T_size = 1
             else:
@@ -156,7 +167,15 @@ class CIRIntensity():
 
                 # Alpha. 
                 alpha_x += 2 * kappa[i] * theta[i] *(np.exp(gamma[i] * T) - 1) / denom
-
+        # In the other case, we will find derivatives numerically. 
+        else: 
+            # Get alpha beta for small changes. 
+            h = np.array([1e-10]*self.X_dim)
+            alpha_x_h,beta_x_h = self.cir_solution(params,h,T)
+            alpha_x_hm,beta_x_hm = self.cir_solution(params,-h,T)
+            # Derivative.
+            alpha_x, beta_x = (alpha_x_h-alpha_x_hm)/(2*h[0]),(beta_x_h-beta_x_hm)/(2*h[0])
+                
         return alpha_x, beta_x
 
 
@@ -176,7 +195,7 @@ class CIRIntensity():
         I = np.zeros(1)
         t_grid = np.arange(t0, t_mat + 1e-12, self.tenor)
         for t_idx in range(1, len(t_grid)):
-            expectation = self.Laplace_Transform(params, lambda_t.T, t_grid[t_idx] - t)
+            expectation = self.Laplace_Transform(params, lambda_t.T, np.array([t_grid[t_idx] - t]))
             I += (t_grid[t_idx]-t_grid[t_idx-1]) * np.exp(-self.r * (t_grid[t_idx] - t)) * expectation
         return I
 
@@ -195,10 +214,10 @@ class CIRIntensity():
     def calc_accrual_leg(self,params,t,t0,t_mat, lambda_t):
         x = np.zeros(self.X_dim)
         t_grid = np.arange(t0, t_mat + 1e-12, self.tenor)
-        integrand = lambda u: (np.exp(-self.r * (u-t)) * self._get_default_grid(u,t_grid) *  
-            (self.cir_derivatives(params,x,u-t)[0] + 
-            self.cir_derivatives(params,x,u-t)[1] @ lambda_t.T) *
-            self.Laplace_Transform(params,lambda_t.T, u - t)
+        integrand = lambda u: (np.exp(-self.r * (np.array([u-t]))) * self._get_default_grid(u,t_grid) *  
+            (self.cir_derivatives(params,x,np.array([u-t]))[0] + 
+            self.cir_derivatives(params,x,np.array([u-t]))[1] @ lambda_t.T) *
+            self.Laplace_Transform(params,lambda_t.T, np.array([u-t]))
         )
 
         Al_val = 0.0
@@ -211,13 +230,18 @@ class CIRIntensity():
     def calc_protection_leg(self,params,t,t0,t_mat, lambda_t):
         x = np.zeros(self.X_dim)
 
-        integrand = lambda u: ((1- self.delta)*np.exp(-self.r * (u-t)) * (
-            self.cir_derivatives(params,x,u-t)[0] + 
-            self.cir_derivatives(params,x,u-t)[1] @ lambda_t.T)*
-            self.Laplace_Transform(params,lambda_t.T, u - t)
+        integrand = lambda u: ((1- self.delta)*np.exp(-self.r * (np.array([u-t]))) * (
+            self.cir_derivatives(params,x,np.array([u-t]))[0] + 
+            self.cir_derivatives(params,x,np.array([u-t]))[1] @ lambda_t.T)*
+            self.Laplace_Transform(params,lambda_t.T, np.array([u-t]))
             )
-        prot_val, _ = quad(integrand,t0,t_mat,epsabs=1e-9, epsrel=1e-9)
+        # prot_val, _ = quad(integrand,t0,t_mat,epsabs=1e-9, epsrel=1e-9)
+        t_grid = np.arange(t0, t_mat + 1e-12, self.tenor)
 
+        prot_val = 0.0
+        for i in range(len(t_grid) - 1):
+            a, b = t_grid[i], t_grid[i + 1]
+            prot_val += quad(integrand, a, b, epsabs=1e-4, epsrel=1e-4, limit=100)[0]
         return prot_val
 
 
@@ -239,6 +263,7 @@ class CIRIntensity():
         if t0 == None:
             t0 = t
         result = np.zeros(t_mat_grid.shape[0], dtype=np.float64)
+
         for i in range(t_mat_grid.shape[0]):
             # Pass a scalar from the array X
             # Make sure that t grid is of size 1 due to logic.
@@ -284,7 +309,7 @@ class CIRIntensity():
     def Kalman(self,params,t_obs, t_mat_grid, Y, result = False):
         print(params)
         kappa,theta,sigma,lambda1,sigma_err = self.unpack_params(params)
-        kappa_p,theta_p = self.build_P_drift(lambda1,np.zeros_like(self.lambda1),kappa,theta)
+        kappa_p,theta_p = self.build_P_drift(lambda1,lambda1,kappa,theta)
         # Stop optimization if bad initial params.
         # positivity constraints (soft bounds)
         # if np.any(params <= 0):
@@ -341,12 +366,21 @@ class CIRIntensity():
         a,A = -a,-A
 
         # Utilize that we can compute this up front.
-        # Create arrays based on obs.
+        # Create arrays based on obs. May vary depending on cascading or not. 
         phis = []
         for i in range(0,unique_delta.shape[0]):
-            phi_0 =  (np.identity(kappa_P_diag.shape[0])-expm(-kappa_P_diag * unique_delta[i])) @ theta_p
-            phi_1 =  expm(-kappa_P_diag * unique_delta[i])
-            phis.append([phi_0,phi_1])
+            if self.cascading:
+                phi_0 = np.zeros(self.X_dim)
+                phi_0[-1] = kappa_p[-1] * theta_p[-1] * unique_delta[i]
+                phi_1 = 1 +  np.identity(self.X_dim) * (-kappa_p) *  unique_delta[i]
+                for j in range(self.X_dim):
+                    if j + 1 < self.X_dim:
+                        phi_1[j, j+1] = kappa[j] * theta[j] *  unique_delta[i]
+                phis.append([phi_0,phi_1])
+            else:
+                phi_0 =  (np.identity(kappa_P_diag.shape[0])-expm(-kappa_P_diag * unique_delta[i])) @ theta_p
+                phi_1 =  expm(-kappa_P_diag * unique_delta[i])
+                phis.append([phi_0,phi_1])
         for n in range(0,n_obs):
             # Special first case
             # UPDATE STEP
@@ -381,9 +415,12 @@ class CIRIntensity():
             # Use CIR Variance for this (not going to need it)
             if (n < n_obs - 1): # Not sensible to predict further.
                 # Works for Uncorrelated and indep noise.
-                Q_t = (sigma**2 * theta_p * (1-np.exp(-(kappa_p) * Delta))**2 / (2 * (kappa_p)) +
-                        Xn * sigma**2 * (np.exp(-(kappa_p) * Delta) - np.exp(-2*(kappa_p) * Delta))/ (kappa_p))
-                Q_t = np.diag( Q_t.flatten())
+                if self.cascading:
+                    Q_t = np.diag(sigma**2 * Xn) * Delta
+                else:
+                    Q_t = (sigma**2 * theta_p * (1-np.exp(-(kappa_p) * Delta))**2 / (2 * (kappa_p)) +
+                            Xn * sigma**2 * (np.exp(-(kappa_p) * Delta) - np.exp(-2*(kappa_p) * Delta))/ (kappa_p))
+                    Q_t = np.diag( Q_t.flatten())
 
                 Delta = t_obs[n+1] - t_obs[n]
                 delta_curr = np.round(Delta,7)
@@ -432,7 +469,7 @@ class CIRIntensity():
         lambda1   = params[3*d:4*d]
         sigma_err = params[-1]
 
-        kappa_p,  theta_p = self.build_P_drift(lambda1,np.zeros_like(self.lambda1),kappa,theta)
+        kappa_p,  theta_p = self.build_P_drift(lambda1,lambda1,kappa,theta)
 
         cons = []
 
@@ -444,8 +481,8 @@ class CIRIntensity():
         # Constraint on lambda.
         g3 = kappa - lambda1
         cons.append(g3)
-        # g4 = lambda1 + kappa*theta 
-        # cons.append(g4)
+        g4 = lambda1 + kappa*theta 
+        cons.append(g4)
         # add identification constraint. Kappas decreasing.
         g5 = np.asarray(kappa[1:]-(kappa[:-1]+1e-3)).flatten() # kappai >= kappa_{i-1}
         cons.append(g5)
@@ -479,7 +516,8 @@ class CIRIntensity():
             func=self.Kalman,
             bounds=bounds,
             constraints=(nonlinear_constraint,),
-            args=(t_obs, t_mat_grid, Y),
+            args=(t_obs[::5], t_mat_grid[:,::5], Y[::5,:]),
+            # args=(t_obs, t_mat_grid, Y),
             strategy='best1bin',
             popsize=15,         # larger popsize -> more exploration
             maxiter=800,       # allow many generations          
@@ -493,17 +531,17 @@ class CIRIntensity():
 
         # If DE failed or hit constraint penalties, bail early
         if result.fun >= 1e12:
-            return result.x, 0, 0, 0,0
+            return result.x, 0, 0, 0
 
         # --- Local Refinement ---
 
         polish_result = minimize(
         fun=self.Kalman,
-            x0=result.x,  # <-- Use DE's best solution as the start
+            x0=result.x,  
             args=(t_obs, t_mat_grid, Y),
             method='trust-constr',
             bounds = bounds,
-            constraints=(nonlinear_constraint,), # <-- Pass the same nonlinear constraints
+            constraints=(nonlinear_constraint,),
             options={
                 'disp': True,
                 'maxiter': 500  # Give it a reasonable number of iterations
@@ -663,7 +701,8 @@ class CIRIntensity():
         prices_MC_hist =  np.zeros(shape = (N,N_strikes))
         for i in range(N):
             # Get default intensity process. 
-            T_return,X_t = self.simulate_intensity(X0,t0,M,scheme = 'Milstein',seed=seed)
+            T_return,X_t = self.simulate_intensity(X0,t0,M,scheme = 'Milstein',
+                                                   seed=seed,measure = 'Q')
             # lambda_t is the sum of latent states..
             lambda_t = np.sum(X_t,axis=1)
             # Compute prob of default at time t0
@@ -708,18 +747,17 @@ class CIRIntensity():
         prices = np.zeros(shape = (N,N_strikes))
         prices_MC_hist = np.zeros(shape = (N,N_strikes))
         for i in range(N):
-            # Get Latent states. Simulate path of CDS till mat.
-            T_return,X_t = self.simulate_intensity(X0,t0,M,scheme = 'Milstein',seed=seed)
-            # Compute prob of default at time t0
+            # Get Latent states. Simulate path of CDS till option mat.
+            T_return,X_t = self.simulate_intensity(X0,T,M,scheme = 'Milstein',
+                                                   seed=seed,measure='Q')
+            # Compute prob of default at time T
             lambda_t = np.sum(X_t,axis=1)
-            # Compute prob of default at time t0
+            # Compute prob of default at time T
             deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
             Lambda = np.cumsum(lambda_t[1:]*deltas)
             # Get model implies CDS.
             CDS_sim = np.zeros(Lambda.shape)
             for n in range(CDS_sim.shape[0]):    
-                # CDS_sim[n] = self.cds_spread(X_t[n,:],params,T_return[n],
-                #                              np.array([T_return[n] + t_M]),T_return[n]+t0)
                 CDS_sim[n] = calc_cds(params, T_return[n], T_return[n] + t_M, 
                                       X_t[n,:], T_return[n]+t0, self.r, self.delta, 
                                       self.tenor, self.X_dim)
@@ -773,10 +811,12 @@ class CIRIntensity():
         cds_min =  np.zeros(shape = N)
         for i in range(N):
             # Get Latent states. Simulate path of CDS till mat.
-            T_return,X_t = self.simulate_intensity(X0,t0,M,scheme = 'Milstein',seed=seed)
-            # Compute prob of default at time t0
+            T_return,X_t = self.simulate_intensity(X0,T,M,scheme = 'Milstein',
+                                                   seed=seed,measure='Q'
+            )
+            # Compute prob of default at time T
             lambda_t = np.sum(X_t,axis=1)
-            # Compute prob of default at time t0
+            # Compute prob of default at time T
             deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
             Lambda = np.cumsum(lambda_t[1:]*deltas)
             # Get model implies CDS.
@@ -796,7 +836,7 @@ class CIRIntensity():
             if np.any(default_event):
                 prices[i] = 0
                 # set min to zero here
-                cds_min[i] =0  # np.min(CDS_sim[:i])
+                cds_min[i] = 0  # np.min(CDS_sim[:i])
             # Else - no default happened
             else: 
                 # Get path minimum of CDS:
