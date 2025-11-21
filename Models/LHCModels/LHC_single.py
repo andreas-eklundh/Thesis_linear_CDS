@@ -367,7 +367,7 @@ def build_P_params(params,params_q,lhc_p):
         lambda_i = params[:m]
         kappa_p = kappa - lambda_i # This is under (i) in THM B.1.
         theta_p = (kappa*theta) / kappa_p
-        theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+        # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
         # theta_p = theta_p + lambda_i / kappa_p
 
         sigma_i,sigma_err = params[m:2*m], params[-1]
@@ -790,7 +790,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     lambda_i,sigma,sigma_err = params_p[:m],params_p[m:2*m], params_p[-1]
     kappa_p = kappa - lambda_i
     theta_p = (kappa*theta) / kappa_p
-    theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]    # Get initial guesses.
+    # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]    # Get initial guesses.
     # theta_p = theta_p + lambda_i / kappa_p
 
     n_obs = CDS_obs.shape[0]
@@ -921,7 +921,7 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
 
     kappa_p = kappa - lambda_i
     theta_p = (kappa*theta) / kappa_p
-    theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+    # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
     # theta_p = theta_p + lambda_i / kappa_p
 
     lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, r, Y_dim, delta, tenor, lambda_i=None)
@@ -954,7 +954,7 @@ def nonlinear_constraints( params, m):
 
     kappa_p = kappa - lambda_i
     theta_p = (kappa*theta) / kappa_p
-    theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+    # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
     # theta_p = theta_p + lambda_i / kappa_p
 
     # ensure arrays
@@ -963,8 +963,8 @@ def nonlinear_constraints( params, m):
     # Constraints on lambda. 'Mean reversion needs to be positive'.
     # g1 =  lambda_i[-1] + kappa[-1]*theta[-1]
     # cons.append(np.asarray(g1).flatten())
-    g1 =  lambda_i[-1] + kappa[-1]*theta[-1]
-    cons.append(np.asarray(g1).flatten())
+    # g1 =  lambda_i[-1] + kappa[-1]*theta[-1]
+    # cons.append(np.asarray(g1).flatten())
 
     # Upper bound
     g1 = kappa - lambda_i
@@ -982,16 +982,22 @@ def nonlinear_constraints( params, m):
 
     # Drift away from 1. not needed for final
     # Constraint for process m with Y_t
-    if m == 1:
-        g3 = gamma1 - kappa + kappa * theta 
-        cons.append(-np.asarray(g3).flatten())
-        g3 = gamma1 - (kappa_p) + (kappa_p * theta_p) 
-        cons.append(-np.asarray(g3).flatten())
-    else:
-        g3 = gamma1 - kappa[:-1] + kappa[:-1] * theta[:-1] + 0.5 * (sigma[:-1] ** 2)
-        cons.append(-g3)
-        g3 = gamma1 - (kappa_p[:-1]) + (kappa_p[:-1] * theta_p[:-1]) + 0.5 * (sigma[:-1]**2)
-        cons.append(-g3)
+    # if m == 1:
+    #     g3 = gamma1 - kappa + kappa * theta 
+    #     cons.append(-np.asarray(g3).flatten())
+    #     g3 = gamma1 - (kappa_p) + (kappa_p * theta_p) 
+    #     cons.append(-np.asarray(g3).flatten())
+    # else:
+    #     g3 = gamma1 - kappa[:-1] + kappa[:-1] * theta[:-1] + 0.5 * (sigma[:-1] ** 2)
+    #     cons.append(-g3)
+    #     g3 = gamma1 - (kappa_p[:-1]) + (kappa_p[:-1] * theta_p[:-1]) + 0.5 * (sigma[:-1]**2)
+    #     cons.append(-g3)
+
+    g3 = gamma1 - kappa + kappa * theta + 0.5 * (sigma ** 2)
+    cons.append(-g3)
+    g3 = gamma1 - (kappa_p) + (kappa_p * theta_p) + 0.5 * (sigma**2)
+    cons.append(-g3)
+
 
     ## All the above are direct artifacts from the model. Still too much flexibility. Choose gamma1
     # s.t. smaller than all thetas.
@@ -1008,13 +1014,48 @@ def nonlinear_constraints( params, m):
     # kappas = np.min(kappa)
     # g6 = np.minimum(kappa_bound,kappas) - gamma1 # Upper cound on gamma1
     # cons.append(np.asarray(g6).flatten())
-    # for i in range(m):
-    #     if i == 0 :
-    #         g6 = theta[i] - gamma1 + 1e-4
-    #     else:
-    #         g6 = theta[i] - theta[i-1] + 1e-4
-    #     cons.append(np.asarray(g6).flatten())
+    # Assuming increasing gamma.
+    for i in range(m):
+        if i == m-1:
+            g6 = kappa[i] - gamma1 + 1e-4
+        else:
+            g6 = kappa[i] - kappa[i+1] + 1e-4
+        cons.append(np.asarray(g6).flatten())
 
+    cons = np.concatenate(cons, dtype=float)
+
+    return cons
+
+
+
+def equality_constraints( params, m):
+    """
+    Vector-valued constraint function for NonlinearConstraint.
+    Returns array `cons` such that cons >= 0 are feasible.
+    If params can't be unpacked properly, returns a negative array (infeasible).
+    """
+    m = int(m)
+    # expected number of constraints: g1, g2 and 2*m for g3,g4 converted -> total 2 + 2*m
+    params_p = np.asarray(params, dtype=float)
+
+    params_p = params[2*m+1:]
+    params_q = params[:2*m+1]
+
+    # Build constraints: all should be >= 0
+    cons = []
+
+    lambda_i,sigma,sigma_err = params_p[:m],params_p[m:2*m],params_p[-1]
+    kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
+
+    kappa_p = kappa - lambda_i
+    theta_p = (kappa*theta) / kappa_p
+    # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+    # theta_p = theta_p + lambda_i / kappa_p
+
+    # ensure arrays
+    sigma = np.asarray(sigma, dtype=float)
+    theta_cons = 1/2 - gamma1 / (4*kappa) - theta
+    cons.append(np.asarray(theta_cons).flatten())
     cons = np.concatenate(cons, dtype=float)
 
     return cons
@@ -1037,13 +1078,16 @@ class LHC_single():
         self.a = np.ones((self.Y_dim,1))                                      # Y dim is 1 for LHC
         # Set inital values. Need to comply with (38)
         # Then draw kappa.
-        self.kappa = rng.uniform(0,2, size=(X_dim,))       # Kappa given
+        self.kappa = rng.uniform(0,1, size=(X_dim,))       # Kappa given
         # Sort descending.
-        # self.kappa = np.sort(self.kappa)
-
-        # self.gamma1 = np.array([0.05]) # rng.unifirm(0,np.min(self.kappa*(1-self.theta)),Y_dim)
+        self.kappa = np.sort(self.kappa)[::-1] # Sort descending
+        # self.theta = np.ones(X_dim) * 0.4
+        # Same interpretation for 1d-case. For multi dim case - Slightly dif
         self.gamma1 = rng.uniform(0.00, np.min(self.kappa) , size=(Y_dim,))
-        self.theta = rng.uniform(0.00, 1 - self.gamma1 / self.kappa, size=(X_dim,))
+        self.theta = 1/2 -  self.gamma1 / (4*self.kappa)  
+        # self.gamma1 = rng.uniform(0.00, np.min((1-self.theta)*self.kappa) , size=(Y_dim,))
+        # self.gamma1 = 1/2-self.theta[0] / self.kappa[0] 
+        # # self.theta = rng.uniform(0.00, 1 , size=(X_dim,))
         # self.theta = np.sort(self.theta)
         # self.gamma1 = np.array([self.theta[0] / 4]) # rng.uniform(0, self.kappa, size=(Y_dim,))    # gamma1 strictly pos.
         # Based on that, select kappa freely. But at some magnitude to ensure gamma too.
@@ -1392,22 +1436,22 @@ class LHC_single():
             # Set inital values. Need to comply with (38). enhanced from thm if used in constr
             lambda_i = np.zeros(X_dim)
             for i in range(self.m):
-                if i == self.m - 1:
-                    lambda_i[i] =  rng.uniform(-self.kappa[i]*self.theta[i],
-                                        0.5*(self.kappa[i] - self.kappa[i]*self.theta[i] -
-                                            self.gamma1),size=(1,))
-                else:
-                    lambda_i[i] = rng.uniform(-1,
-                                            (self.kappa[i] - self.theta[i]*self.kappa[i] -
-                                            self.gamma1),size=(1,)) # initialise gamma to comply.
-                # lambda_i[i] =  rng.uniform(-self.kappa[i]*self.theta[i],
+                # if i == self.m - 1:
+                #     lambda_i[i] =  rng.uniform(-self.kappa[i]*self.theta[i],
                 #                         0.5*(self.kappa[i] - self.kappa[i]*self.theta[i] -
                 #                             self.gamma1),size=(1,))
+                # else:
+                #     lambda_i[i] = rng.uniform(-1,
+                #                             (self.kappa[i] - self.theta[i]*self.kappa[i] -
+                #                             self.gamma1),size=(1,)) # initialise gamma to comply.
+                lambda_i[i] =  rng.uniform(-1,
+                                        (self.kappa[i] - self.kappa[i]*self.theta[i] -
+                                            self.gamma1),size=(1,))
             # Try lambda to zero.
             kappa_p =  self.kappa - lambda_i  #rng.uniform(gamma1, 0.99, size=(X_dim,))       # Kappa given
             theta_p = (self.kappa * self.theta) / kappa_p # Value for prod to be unchanged.
             # # Correction for i=ms
-            theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+            # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
             # theta_p = theta_p + lambda_i / kappa_p
 
             ### New stuff: All the ones needed here e.g. sigma, sigma_Err
@@ -1444,7 +1488,7 @@ class LHC_single():
 
             kappa_p = self.kappa - lambda_i
             theta_p = (self.kappa*self.theta) / kappa_p
-            theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+            # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
             # theta_p = theta_p + lambda_i / kappa_p
 
             r = self.r
@@ -1495,7 +1539,7 @@ class LHC_single():
         if self.m == 1:
             bounds = (
                 [(1e-6, 2)] * m +     # kappa
-                [(1e-6, 1)] * m +     # eta=theta*gamma1. Same bounds.
+                [(1e-6,1)] * m +     # eta=theta*gamma1. Same bounds.
                 [(0.0001,1)] +        # gamma1
                 [(-1, 1)] * m  +         # lambda_p
                 [(1e-6, 1)] * m +     # sigma
@@ -1504,11 +1548,11 @@ class LHC_single():
         else:
             bounds = (
                 [(1e-6, 2)] * m +     # kappa - slightly higher bound
-                [(1e-6, 1)] * (m) +     # theta
+                [(1e-6, 1)] * m +     # eta=theta*gamma1. Same bounds.
                 [(0.0001,1)] +        # gamma1
                 [(-1, 1)] *(m)  +     # lambda_p
                 [(1e-6, 1)] * m +     # sigma
-                [(1e-6, 0.005)]         # sigma_err
+                [(1e-5, 0.005)]         # sigma_err
             )
         nlc = NonlinearConstraint(lambda x: nonlinear_constraints(x,self.m), 0, np.inf)
         # theta_index = m   # Index of theta[0]
@@ -1520,14 +1564,15 @@ class LHC_single():
         # A_matrix[theta_index] = 1.0 / 4
         # A_matrix[gamma1_index] = -1.0
         # equality_con = LinearConstraint(A_matrix, lb=0, ub=0)
-
+        # Give some space to wiggle
+        eq = NonlinearConstraint(lambda x: equality_constraints(x,self.m), -1e-2,1e-2)
 
         # Global optimizer: few iters. Do on supsed only.
         result = differential_evolution(
             func= kalman_wrapper,
             # x0=x0, # Maybe initial value is wrong here?
             bounds=bounds,
-            constraints=(nlc,),
+            constraints=(nlc,eq),
             # constraints=(nlc,equality_con),
 
             # args=(t_obs, t0, T_M_grid, CDS_obs,
@@ -1535,7 +1580,7 @@ class LHC_single():
             args=(t_obs[::5],t0[::5], T_M_grid[:,::5], CDS_obs[::5,:],
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
 
-            strategy='best1exp',
+            strategy='best1bin',
             popsize=20 ,
             mutation=(0.7, 1.0),
             recombination=0.9,
@@ -1549,8 +1594,8 @@ class LHC_single():
         )
 
         # If DE failed or hit constraint penalties, bail early
-        if result.fun >= 1e12:
-            return result.x, 0, 0, 0,0
+        # if result.fun >= 1e12:
+        #     return result.x, 0, 0, 0,0
 
 
         # polish_result = minimize(
@@ -1580,39 +1625,38 @@ class LHC_single():
 
 
         # --- Evaluate Kalman filter at final parameters ---
-        if self.kalman_obj >= 1e12:
-            return optim_params, 0, 0, 0,0
-        else:
-            params_p =  optim_params[2*m+1:]
-            params_q = optim_params[:2*m+1]
-            lambda_i = params_p[:m]
-            kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
+        # if self.kalman_obj >= 1e12:
+        #     return optim_params, 0, 0, 0,0
+        params_p =  optim_params[2*m+1:]
+        params_q = optim_params[:2*m+1]
+        lambda_i = params_p[:m]
+        kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
 
-            # gamma1 = gamma1_p*kappa[0]
-            # Update gamma
-            # params_q[-1] = params_q[-1] * kappa[0]
+        # gamma1 = gamma1_p*kappa[0]
+        # Update gamma
+        # params_q[-1] = params_q[-1] * kappa[0]
 
-            kappa_p  = kappa - lambda_i
-            theta_p = (kappa*theta) / kappa_p
-            theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
-            # theta_p = theta_p + lambda_i / kappa_p
+        kappa_p  = kappa - lambda_i
+        theta_p = (kappa*theta) / kappa_p
+        # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+        # theta_p = theta_p + lambda_i / kappa_p
 
-            lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, self.r,
-                                       self.Y_dim, self.delta, self.tenor,lambda_i=None)
-            lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, self.r,
-                                       self.Y_dim, self.delta, self.tenor,lambda_i=None)
+        lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, self.r,
+                                    self.Y_dim, self.delta, self.tenor,lambda_i=None)
+        lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, self.r,
+                                    self.Y_dim, self.delta, self.tenor,lambda_i=None)
 
-            neg_log_lik, Xn, Zn, Pn = kalmanfilter_opt(optim_params, t_obs,t0,T_M_grid,CDS_obs,
-                                                       lhc_p,lhc_q,self.X0)
-            # Build structures in very end to take onwards.
-            self.build_P_params(params_p,np.array([gamma1]))
-            self.flatten_params()
-            self.unflatten_params(params_q)
-            # Get SE
-            kalman_args = (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0)
-            se = self.kalman_SE(params_opt=optim_params,f_args=kalman_args,eps = 1e-9)
+        neg_log_lik, Xn, Zn, Pn = kalmanfilter_opt(optim_params, t_obs,t0,T_M_grid,CDS_obs,
+                                                    lhc_p,lhc_q,self.X0)
+        # Build structures in very end to take onwards.
+        self.build_P_params(params_p,np.array([gamma1]))
+        self.flatten_params()
+        self.unflatten_params(params_q)
+        # Get SE
+        kalman_args = (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0)
+        se = self.kalman_SE(params_opt=optim_params,f_args=kalman_args,eps = 1e-9)
 
-            return optim_params, Xn, Zn, Pn, se
+        return optim_params, Xn, Zn, Pn, se
 
     def run_n_kalmans(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20):
         # Define grid of values.
@@ -1666,8 +1710,9 @@ class LHC_single():
 
         # Then loop over dates to compute SE
         for date in  range(n):
-            se += np.linalg.pinv(np.outer(g[date,:], g[date,:])/n)
-        se = se / n
+            se += np.outer(g[date,:], g[date,:])/ n
+        # SE matrix is inverted cov estimate. Asymptotics
+        se = np.linalg.pinv(se) / n
         se_vec = np.sqrt(np.diag(se))
         return se_vec
 
@@ -1740,7 +1785,7 @@ class LHC_single():
         if scheme == 'Euler':
             for i in range(1,M+1):
                 # Cap X process in 0,1 to avioid discretization error.
-                path_Q[i-1,1:] = np.clip(path_Q[i-1,1:],1e-8,path_Q[i-1,0])
+                path_Q[i-1,1:] = np.clip(path_Q[i-1,1:],1e-8,path_Q[i-1,0]-1e-8)
                 # Out
                 mu_t = A @ path_Q[i - 1,:]
                 # Create Sigma:
@@ -1750,7 +1795,7 @@ class LHC_single():
 
         if scheme == 'Milstein':
             for i in range(1,M+1):
-                path_Q[i-1,1:] = np.clip(path_Q[i-1,1:], 1e-8,path_Q[i-1,0])
+                path_Q[i-1,1:] = np.clip(path_Q[i-1,1:], 1e-8,path_Q[i-1,0]-1e-8)
 
                 mu_t = A @ path_Q[i - 1,:]
                 # Create Sigma:
@@ -1798,7 +1843,7 @@ class LHC_single():
         if scheme == 'Euler':
             for i in range(1,M+1):
                 # Out
-                path_Q[i-1,:] = np.clip(path_Q[i-1,:], 1e-8,1)
+                path_Q[i-1,:] = np.clip(path_Q[i-1,:], 1e-8,1-1e-8)
                 diag_term =  np.identity(self.m)*(-self.gamma.flatten() @path_Q[i - 1,:])
                 mu_t = (b.flatten()+
                         (beta + diag_term) @ path_Q[i - 1,:])
@@ -1809,7 +1854,7 @@ class LHC_single():
 
         if scheme == 'Milstein':
             for i in range(1,M+1):
-                path_Q[i-1,:] = np.clip(path_Q[i-1,:],1e-8,1)
+                path_Q[i-1,:] = np.clip(path_Q[i-1,:],1e-8,1-1e-8)
 
                 diag_term =  np.identity(self.m)*(-self.gamma.flatten() @path_Q[i - 1,:])
                 mu_t = (b.flatten()+
@@ -1904,9 +1949,10 @@ class LHC_single():
             Xn = X_Q[:,self.Y_dim:]
             Yn = X_Q[:,0]
             # Retrieve price path...
-            T_M_grid = ((T_return + t_M)).reshape((1,T_return.shape[0]))
+            T_M_grid = (np.array([t_M]*T_return.shape[0])).reshape((1,T_return.shape[0]))
+            t0_arr = (np.array([t0]*T_return.shape[0])).reshape((T_return.shape[0]))
             # Here formula is the t_obs according to formula
-            CDS_sim = get_CDS_Model(T_return, T_return+t0, T_M_grid, X_Q.T, lhc )
+            CDS_sim = get_CDS_Model(T_return, t0_arr, T_M_grid, X_Q.T, lhc )
             S = Yn
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
             U = uniform.rvs(random_state = seed)
@@ -1966,8 +2012,10 @@ class LHC_single():
             T_return, X_Q = self.simul_latent_states( chi0,T,M,n_mat=1,seed=seed,
                                                      scheme='Milstein', measure='Q')
             # Retrieve price path...
-            T_M_grid = ((T_return + t_M)).reshape((1,T_return.shape[0]))
-            CDS_sim = get_CDS_Model(T_return, T_return+t0, T_M_grid, X_Q.T, lhc )
+            T_M_grid = (np.array([t_M]*T_return.shape[0])).reshape((1,T_return.shape[0]))
+            t0_arr = (np.array([t0]*T_return.shape[0])).reshape((T_return.shape[0]))
+            # Here formula is the t_obs according to formula
+            CDS_sim = get_CDS_Model(T_return, t0_arr, T_M_grid, X_Q.T, lhc )
             if np.any(CDS_sim == np.nan):
                 print('Nan value')
 
@@ -1975,11 +2023,12 @@ class LHC_single():
             # Determine if default or not at t0. If S_t \leq unif(1) option payoff is zero.
             U = uniform.rvs(random_state = seed)
             # If survival falls below U at any points, default happened prior to T - No payoff
+            # No payoff makes sense as payoff contigent on final price.
             default_event =  S <= U
             if np.any(default_event):
                 prices[i] = 0
                 # set min to zero here
-                cds_min[i] =0  # np.min(CDS_sim[:i])
+                cds_min[i] = 0  # np.min(CDS_sim[:i])
             # Else - no default happened
             else:
                 # Get path minimum of CDS:
