@@ -5,7 +5,7 @@ from Models.LHCModels.LHC_single import LHC_single
 from scipy.linalg import expm 
 from Models.moments import MultivariatePolynomialGenerator as MPG
 from Models.LHCModels.LHC_single import rebuild_lhc_struct
-
+from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity as CIR
 
 #### Numerical test of CIR example.
 kappa,theta,sigma = 0.2,0.05,0.1 
@@ -45,6 +45,41 @@ print(f'Sympy Cov {cov_symp}')
 
 
 
+### Test cascading mean:
+X_dim = 3
+#### Numerical test of CIR example.
+cir = CIR(r=0.0252,delta=0.4,tenor=0.25,X_dim=X_dim,cascading=True)
+X0=np.array([0.07,0.07,0.07])
+T,t=10e6,0
+delta = T-t         
+
+
+chi_syms = sp.symbols(['X1','X2','X3'])   
+chi_sym = sp.Matrix(chi_syms)               
+drift = ( sp.Matrix(cir.K0)  + sp.Matrix(cir.K1 @ chi_sym))
+diag_entries = [sp.sqrt(chi_sym[i]) * cir.sigma[i] for i in range(X_dim)]
+diffusion = sp.diag(*diag_entries)
+
+# As second term in drift, need monomials to fourth degree.
+pmg = MPG(drift, diffusion, chi_sym, max_degree=2)
+
+### Get moment matrices
+
+G_n = pmg.generator_matrix()
+chi_dict = dict(zip(chi_syms, X0))
+E_sympy = pmg.calculate_expected(chi_dict,delta)
+print(f'Actual expectation {- np.linalg.inv(cir.K1) @ (cir.theta*cir.kappa)}')
+print(f'Actual expectation2 {np.cumsum(cir.theta[::-1])[::-1]}')
+
+print(f'Sympy expectation {E_sympy}')
+
+# Covariance
+cov_symp = pmg.calculate_cov(chi_dict,delta)
+print(f'Cascading Sympy Cov {cov_symp}')
+
+# See if we can find this too?
+Var, Var_inf = cir.get_cond_var(-cir.K1,cir.sigma**2*np.diag(np.cumsum(cir.theta[::-1])[::-1]),T-t)
+print(f'Cascading theor Cov {Var_inf}')
 
 ##### LHC model moments
 

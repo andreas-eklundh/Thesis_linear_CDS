@@ -181,7 +181,7 @@ class DeterministicGamma:
             b = 0.5
             fa = f(a)
             fb = f(b)
-            max_b = 1e3
+            max_b = 5e3
             while fa * fb > 0 and b < max_b:
                 b *= 2.0
                 fb = f(b)

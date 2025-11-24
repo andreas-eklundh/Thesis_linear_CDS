@@ -15,7 +15,7 @@ if __name__ == '__main__':
     tenor = 0.25
     X_dim = 2
 
-    cir = CIRIntensity(r,delta,tenor,X_dim)
+    cir = CIRIntensity(r,delta,tenor,X_dim,cascading=True)
     x0 = np.array([0])
     import pandas as pd
     t_grid = [0 + 0.25* i for i in range(0, int(10 / 0.25)+1)]
@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
 
     # Negative process. Multiply by -1 everywhere. Let A and a get these too. 
-    params, Xn,Zn,Pn = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=2000)
+    params, Xn,Zn,Pn,se = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=2000)
 
     # Ttry with several restarts. 
     # params, Xn,Zn,Pn = cir.run_n_kalman(t,t_mat_grid,Y=Gamma_kalman,base_seed=206,n_restarts=5)
@@ -84,8 +84,8 @@ if __name__ == '__main__':
         plt.plot(t, CDS_obs[:, j], 
                     label=f"Obs {T}Y", marker='o', alpha=0.5)
         # Implied line
-        plt.plot(t, CDS_cir[:, j], 
-                    label=f"CIR {T}Y", linestyle='--',)
+        # plt.plot(t, CDS_cir[:, j], 
+        #             label=f"CIR {T}Y", linestyle='--',)
 
     plt.xlabel("Time")
     plt.ylabel("CDS Spread (bps)")
@@ -116,7 +116,9 @@ if __name__ == '__main__':
 
 
     # Default intensity probability since inception (identical to state if dim=1)
-    default_intensity = np.sum(Xn,axis=1)
+    # default_intensity = np.sum(Xn,axis=1)
+    default_intensity = Xn[:,0]
+
     fig, ax = plt.subplots(figsize=(10,4))
 
     # Custom name for the first latent state
@@ -183,14 +185,14 @@ if __name__ == '__main__':
     plt.close(fig)
 
 
-    np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/DANBNK/Kalman_resultsCIR.npz",
-            final_param=params,
-            Xn=Xn,
-            Zn=Zn,
-            Pn = Pn,
-            Yn = Yn,
-            default_intensity = default_intensity,
-            CDS_cir = CDS_cir)
+    # np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/DANBNK/Kalman_resultsCIR.npz",
+    #         final_param=params,
+    #         Xn=Xn,
+    #         Zn=Zn,
+    #         Pn = Pn,
+    #         Yn = Yn,
+    #         default_intensity = default_intensity,
+    #         CDS_cir = CDS_cir)
 
 
     test = 1

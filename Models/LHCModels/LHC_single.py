@@ -770,6 +770,26 @@ def compute_stationary(kappa, theta, m, gamma1, mu1,lambda_i):
         mu_process[i] = sign * prod
     return mu_process
 
+@njit
+def calc_gamma1(kappa, theta, lambda_i=None):
+    '''
+    Lambda fct is only legacy. just plug in values for kappa_p,thetap when needed. 
+    '''
+    # Get stationary lambda1. 
+    stationary_spread = 5 / 10000
+    # NOTE: hard coded recovery rate. cant be bothered to expand at this point
+    lambda_bar1 = stationary_spread #/ (1-0.4)
+    m = len(kappa)
+    if lambda_i is None:
+        lambda_i = np.zeros(m)
+    prod = 1.0
+    for j in range(m):
+        prod *= kappa[j] * theta[j] / (lambda_bar1 - (kappa[j]-lambda_i[j]))
+    gamma1 = lambda_bar1 / (((-1)**m) * prod)
+
+    # Solve only for admissible range
+    return np.array([gamma1])
+
 
 # One kalman filter for optimizing and one for outputting.
 @njit
@@ -783,10 +803,11 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
                     id_mat, r, m, Y_dim,
                     delta, tenor) = lhc_p
     # Define the parameters already to be able to look over them
-    params_q = params[:2*m+1]
-    kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
-
-    params_p = params[2*m+1:]
+    params_q = params[:2*m]
+    kappa, theta = params_q[:m],params_q[m:2*m]
+    gamma1 = calc_gamma1(kappa,theta)
+    gamma1 = gamma1[0]
+    params_p = params[2*m:]
     lambda_i,sigma,sigma_err = params_p[:m],params_p[m:2*m], params_p[-1]
     kappa_p = kappa - lambda_i
     theta_p = (kappa*theta) / kappa_p
@@ -816,6 +837,7 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
 
     # Initial Predictions of means and cov
     # Only criteria on mu1 - mu1 < k/kappa. Set to theta
+    # This is undeer Q
     mu1 = solve_mu1(kappa_p, theta_p, gamma1,lambda_i=None)
     mu = compute_stationary(kappa_p,theta_p,m,gamma1,mu1 = mu1,lambda_i=None)
     # Bound mu jus in case.
@@ -914,11 +936,16 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
 def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor):
     print(params)
     # For numerical stability.
-    params_p = params[2*m+1:]
-    params_q = params[:2*m+1]
+    # params_p = params[2*m+1:]
+    # params_q = params[:2*m+1]
+    params_p = params[2*m:]
+    params_q = params[:2*m]
     lambda_i = params_p[:m]
-    kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
+    # kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
+    kappa, theta = params_q[:m],params_q[m:2*m]
 
+    gamma1 = calc_gamma1(kappa,theta)
+    gamma1 = gamma1[0]
     kappa_p = kappa - lambda_i
     theta_p = (kappa*theta) / kappa_p
     # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
@@ -943,15 +970,17 @@ def nonlinear_constraints( params, m):
     # expected number of constraints: g1, g2 and 2*m for g3,g4 converted -> total 2 + 2*m
     params_p = np.asarray(params, dtype=float)
 
-    params_p = params[2*m+1:]
-    params_q = params[:2*m+1]
-
+    # params_p = params[2*m+1:]
+    # params_q = params[:2*m+1]
+    params_p = params[2*m:]
+    params_q = params[:2*m]
     # Build constraints: all should be >= 0
     cons = []
 
     lambda_i,sigma,sigma_err = params_p[:m],params_p[m:2*m],params_p[-1]
-    kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
-
+    # kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
+    kappa, theta = params_q[:m],params_q[m:2*m]
+    gamma1 = calc_gamma1(kappa,theta)
     kappa_p = kappa - lambda_i
     theta_p = (kappa*theta) / kappa_p
     # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
@@ -1005,9 +1034,12 @@ def nonlinear_constraints( params, m):
     # in the sigma constraints.
 
     # Make a theta assumption.
-    # for i in range(0,m):
-    #     g6 = theta[i] - gamma1 # theta_i >= gamma1.
-    #     cons.append(g6)
+    # for i in range(m):
+    #     if i == m-1:
+    #         g6 = theta[i] - 1e-4
+    #     else:
+    #         g6 = theta[i] - theta[i+1] + 1e-4
+    #     cons.append(np.asarray(g6).flatten())
 
     # Gamma constraint.
     # kappa_bound = kappa[0] / (1+kappa[0])
@@ -1017,7 +1049,7 @@ def nonlinear_constraints( params, m):
     # Assuming increasing gamma.
     for i in range(m):
         if i == m-1:
-            g6 = kappa[i] - gamma1 + 1e-4
+            g6 = kappa[i] - 1e-4
         else:
             g6 = kappa[i] - kappa[i+1] + 1e-4
         cons.append(np.asarray(g6).flatten())
@@ -1078,16 +1110,20 @@ class LHC_single():
         self.a = np.ones((self.Y_dim,1))                                      # Y dim is 1 for LHC
         # Set inital values. Need to comply with (38)
         # Then draw kappa.
-        self.kappa = rng.uniform(0,1, size=(X_dim,))       # Kappa given
+        self.kappa = rng.uniform(0,2, size=(X_dim,))       # Kappa given
         # Sort descending.
-        self.kappa = np.sort(self.kappa)[::-1] # Sort descending
+        # self.kappa = np.sort(self.kappa)[::-1] # Sort descending
         # self.theta = np.ones(X_dim) * 0.4
         # Same interpretation for 1d-case. For multi dim case - Slightly dif
-        self.gamma1 = rng.uniform(0.00, np.min(self.kappa) , size=(Y_dim,))
-        self.theta = 1/2 -  self.gamma1 / (4*self.kappa)  
+        # For 1-d case, product of kappa theta needs to equal lambda1
+        self.theta = rng.uniform(0.01, 1 , size=(X_dim,))
+        # self.theta = np.sort(self.theta)[::-1] # Sort descending
+
+        # self.theta = lambda_bar1 / self.kappa
+
+        # gamma1 calculated under Q.
+        self.gamma1 = self.calc_gamma1(self.kappa,self.theta,lambda_i=None)
         # self.gamma1 = rng.uniform(0.00, np.min((1-self.theta)*self.kappa) , size=(Y_dim,))
-        # self.gamma1 = 1/2-self.theta[0] / self.kappa[0] 
-        # # self.theta = rng.uniform(0.00, 1 , size=(X_dim,))
         # self.theta = np.sort(self.theta)
         # self.gamma1 = np.array([self.theta[0] / 4]) # rng.uniform(0, self.kappa, size=(Y_dim,))    # gamma1 strictly pos.
         # Based on that, select kappa freely. But at some magnitude to ensure gamma too.
@@ -1240,6 +1276,7 @@ class LHC_single():
         # Numba code to generate matrices to solve for.
         # If nones, need to overwrite
         if (X_in is None) | (Y_in is None) :
+            # This function is for the filipovic optiomizatinop
             X_in,Y_in, Z = get_states(lhc, t_obs, T_M_grid, CDS_obs,kappa, theta, gamma1)
 
         if Z_in is not None:
@@ -1320,7 +1357,10 @@ class LHC_single():
 
         # Format params for calculations
         # self.test_constriants()
-        self.unflatten_params(params)
+        kappa,theta = params[:self.m], params[self.m:2*self.m]
+        gamma1 = self.calc_gamma1(kappa,theta)
+        params_flatten = np.append(params,gamma1)
+        self.unflatten_params(params_flatten)
 
 
         #  Build Psi functions to avoid redoing it later.
@@ -1333,11 +1373,14 @@ class LHC_single():
         # Test for feasibility.
         cons = []
         # 2. Custom constraints
-        g1 = params[self.m-1] * params[2*self.m-1]
-        cons.append(g1)
+        kappa,theta = params[:self.m],params[self.m:2*self.m]
+        # set gamma1.
+        gamma1 = self.calc_gamma1(kappa,theta)
+        g1 = kappa[-1]*theta[-1]
+        cons.append(np.asarray(g1).flatten())
 
         for i in range(self.m):
-            g3 = -(params[2*self.m] - params[i] + params[i] * params[self.m+i])
+            g3 = -(gamma1 - kappa[i] + kappa[i] * theta[i])
             cons.append(g3)
 
         return cons
@@ -1347,6 +1390,8 @@ class LHC_single():
     def optimize_params(self,t_obs, T_M_grid, CDS_obs,base_seed=1000):
         # Retrieve initial parameters.
         flat_init = self.flatten_params().copy()
+        # drop gamma1
+        flat_init = flat_init[:-1]
         CDS_obs = np.ascontiguousarray(CDS_obs)
 
         # result = minimize(
@@ -1363,9 +1408,9 @@ class LHC_single():
         #     }
         # )
         bounds = (
-                [(1e-6, 1)] * self.m +     # kappa
-                [(1e-6, 1)] * self.m +     # theta
-                [(1.e-6,1)]         # gamma1
+                [(1e-6, 2)] * self.m +     # kappa
+                [(1e-6, 1)] * self.m      # theta
+                # [(1.e-6,1)]         # gamma1
                 )
         constraints = NonlinearConstraint(lambda x: self.build_constraints(x), 0, np.inf)
 
@@ -1377,10 +1422,10 @@ class LHC_single():
             args = (t_obs[::5],  T_M_grid[:,::5], CDS_obs[::5,:]),
             # args = (t_obs, T_M_grid, CDS_obs),
             strategy='best1bin',
-            popsize=50,
-            mutation=(0.8, 1.0),
-            recombination=0.5,
-            maxiter=400,
+            popsize=6, # 20 in prod,
+            mutation=(0.7, 1.0),
+            recombination=0.9,
+            maxiter=100, #500 in prod
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1392,14 +1437,16 @@ class LHC_single():
 
         if result.success:
             print(f"Optimization succeeded, params:{result.x}, objective: {result.fun}")
-            self.unflatten_params(result.x)
             self.objective_result = result.fun
         else:
             print("Optimization failed:", result.message)
-            self.unflatten_params(result.x)
             self.objective_result = result.fun
-
-        return result.x
+        kappa,theta = result.x[:self.m],result.x[self.m:2*self.m]
+        # set gamma1.
+        gamma1 = self.calc_gamma1(kappa,theta)
+        params = np.append(result.x,gamma1)
+        self.unflatten_params(params)
+        return params
 
     def optimal_parameter_set(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20):
         # Define grid of values.
@@ -1466,8 +1513,8 @@ class LHC_single():
             for i in range(0,self.m):
                 # not too sure of lower bounds here...
                 if i == self.m-1:
-                    # sigma_i[i] = rng.uniform(0, np.minimum(sigma_thetakap,sigma_upper[i]) , size=(1,))       # Kappa given
-                    sigma_i[i] = rng.uniform(0, sigma_thetakap, size=(1,))       # Kappa given
+                    sigma_i[i] = rng.uniform(0, np.minimum(sigma_thetakap,sigma_upper[i]) , size=(1,))       # Kappa given
+                    # sigma_i[i] = rng.uniform(0, sigma_thetakap, size=(1,))       # Kappa given
                 else:
                     sigma_i[i] = rng.uniform(0,sigma_upper[i],size=(1,)) # initialise gamma to comply.
 
@@ -1531,6 +1578,23 @@ class LHC_single():
         return mu_process
 
 
+    ## New: assume long term credit spread 5 bps. Then find gamma1.
+    def calc_gamma1(self,kappa, theta, lambda_i=None):
+        # Get stationary lambda1. 
+        stationary_spread = 5 / 10000
+        lambda_bar1 = stationary_spread #/ (1-self.delta)
+        m = len(kappa)
+        if lambda_i is None:
+            lambda_i = np.zeros(m)
+        prod = 1.0
+        for j in range(m):
+            prod *= kappa[j] * theta[j] / (lambda_bar1 - (kappa[j]-lambda_i[j]))
+        gamma1 = lambda_bar1 / (((-1)**m) * prod)
+
+        # Solve only for admissible range
+        return np.array([gamma1])
+
+
     # One kalman filter for optimizing and one for outputting.
 
     def get_kalman_params(self, t_obs, T_M_grid, CDS_obs, x0,base_seed):
@@ -1540,7 +1604,7 @@ class LHC_single():
             bounds = (
                 [(1e-6, 2)] * m +     # kappa
                 [(1e-6,1)] * m +     # eta=theta*gamma1. Same bounds.
-                [(0.0001,1)] +        # gamma1
+                # [(0.0001,1)] +        # gamma1
                 [(-1, 1)] * m  +         # lambda_p
                 [(1e-6, 1)] * m +     # sigma
                 [(1e-6, 0.005)]         # sigma_err. Unrealistic measure noise is more than 50 Bps
@@ -1549,7 +1613,7 @@ class LHC_single():
             bounds = (
                 [(1e-6, 2)] * m +     # kappa - slightly higher bound
                 [(1e-6, 1)] * m +     # eta=theta*gamma1. Same bounds.
-                [(0.0001,1)] +        # gamma1
+                # [(0.0001,1)] +        # gamma1
                 [(-1, 1)] *(m)  +     # lambda_p
                 [(1e-6, 1)] * m +     # sigma
                 [(1e-5, 0.005)]         # sigma_err
@@ -1565,15 +1629,15 @@ class LHC_single():
         # A_matrix[gamma1_index] = -1.0
         # equality_con = LinearConstraint(A_matrix, lb=0, ub=0)
         # Give some space to wiggle
-        eq = NonlinearConstraint(lambda x: equality_constraints(x,self.m), -1e-2,1e-2)
+        # eq = NonlinearConstraint(lambda x: equality_constraints(x,self.m), -1e-2,1e-2)
 
         # Global optimizer: few iters. Do on supsed only.
         result = differential_evolution(
             func= kalman_wrapper,
             # x0=x0, # Maybe initial value is wrong here?
             bounds=bounds,
-            constraints=(nlc,eq),
-            # constraints=(nlc,equality_con),
+            # constraints=(nlc,eq),
+            constraints=(nlc),
 
             # args=(t_obs, t0, T_M_grid, CDS_obs,
             #     self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
@@ -1581,10 +1645,10 @@ class LHC_single():
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
 
             strategy='best1bin',
-            popsize=20 ,
+            popsize=6, # 20 in prod,
             mutation=(0.7, 1.0),
             recombination=0.9,
-            maxiter=500, # 400 in prod
+            maxiter=100, # 500 in prod
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1627,11 +1691,11 @@ class LHC_single():
         # --- Evaluate Kalman filter at final parameters ---
         # if self.kalman_obj >= 1e12:
         #     return optim_params, 0, 0, 0,0
-        params_p =  optim_params[2*m+1:]
-        params_q = optim_params[:2*m+1]
+        params_p =  optim_params[2*m:]
+        params_q = optim_params[:2*m]
         lambda_i = params_p[:m]
-        kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
-
+        kappa, theta = params_q[:m],params_q[m:2*m]
+        gamma1 = calc_gamma1(kappa,theta)
         # gamma1 = gamma1_p*kappa[0]
         # Update gamma
         # params_q[-1] = params_q[-1] * kappa[0]
@@ -1641,16 +1705,18 @@ class LHC_single():
         # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
         # theta_p = theta_p + lambda_i / kappa_p
 
-        lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1, self.r,
+        lhc_p = rebuild_lhc_struct(kappa_p, theta_p, gamma1[0], self.r,
                                     self.Y_dim, self.delta, self.tenor,lambda_i=None)
-        lhc_q = rebuild_lhc_struct(kappa, theta, gamma1, self.r,
+        lhc_q = rebuild_lhc_struct(kappa, theta, gamma1[0], self.r,
                                     self.Y_dim, self.delta, self.tenor,lambda_i=None)
 
         neg_log_lik, Xn, Zn, Pn = kalmanfilter_opt(optim_params, t_obs,t0,T_M_grid,CDS_obs,
                                                     lhc_p,lhc_q,self.X0)
         # Build structures in very end to take onwards.
-        self.build_P_params(params_p,np.array([gamma1]))
+        self.build_P_params(params_p,gamma1)
         self.flatten_params()
+        # Add gamma1 to params.
+        params_q = np.append(params_q,gamma1)
         self.unflatten_params(params_q)
         # Get SE
         kalman_args = (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0)
@@ -1673,7 +1739,7 @@ class LHC_single():
             # Set the error to be the Stddeviation of CDS_obs
             # Flatten for scipy.
             x0_Q = self.flatten_params()
-
+            x0_Q = x0_Q[:-1] # No longer gamma interesting.
             x0_P = np.concatenate([
                 self.lambda_i.flatten(),
                 self.sigma.flatten(),
@@ -1681,10 +1747,11 @@ class LHC_single():
             ])
 
             x0 = np.concatenate([x0_Q,x0_P])
-            params_p = x0[2*self.m+1:]
-            params_q = x0[:2*self.m+1]
+            params_p = x0[2*self.m:]
+            params_q = x0[:2*self.m]
             lhc_p,lambda_i, sigma, sigma_err = build_P_params(params_p,params_q,lhc_p)
-            kappa, theta, gamma1 = params_q[:self.m],params_q[self.m:2*self.m], params_q[-1]
+            # kappa, theta, gamma1 = params_q[:self.m],params_q[self.m:2*self.m], params_q[-1]
+            kappa, theta = params_q[:self.m],params_q[self.m:2*self.m]
 
             # Test several random points.
             optim_params,  Xn,Zn, Pn,se= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0, base_seed=base_seed + i)
@@ -2114,6 +2181,8 @@ class LHC_single():
             # correct normalization for orthonormal basis on [b_min,b_max]
             # Veryfi the equation of generalized Legendre poly?
             norm = np.sqrt((2 * n + 1) / ((b_max - b_min)))
+            # norm = np.sqrt((2 * n + 1) / (2*(sigma**2)))
+
             coef = norm * Pn_scaled.coef
             a_scaled[n, :coef.shape[0]] = coef
 

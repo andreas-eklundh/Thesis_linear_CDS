@@ -14,8 +14,8 @@ if __name__ == "__main__":
 
     #### Preliminary investigation.
     sub_df = pd.read_excel("./Data/subset_data.xlsx")
-    # firms = ['CMZB','DANBNK','MONTE', 'SVSKHB'] # IG,IG,HY,IG
-    firms = ['CMZB','DANBNK']#, 'SVSKHB'] # IG,IG,HY,IG
+    firms = ['CMZB','DANBNK','MONTE', 'SVSKHB'] # IG,IG,HY,IG
+    firms = [ 'CMZB'] # IG,IG,HY,IG
 
     # Pivot
 
@@ -32,7 +32,7 @@ if __name__ == "__main__":
     from Result_plots import print_model_params
 
     # X_dims = [1,2,3]
-    X_dims = [1,2,3]
+    X_dims = [2,3]
     for firm in firms:
         test_df = sub_df[(sub_df['Ticker']==firm)]
         test_df = test_df.pivot(index = ['Date','Ticker'],
@@ -70,18 +70,18 @@ if __name__ == "__main__":
             print_model_params("LHC Filipovic", final_paramLHC, m=i)
 
 
-            # filepath = os.path.join(directory, f"Kalman_resultsCIR_Xdim{i}.npz")
-            # data = np.load(filepath)
-            # final_paramCIR=data['final_param']
-            # XnCIR=data['Xn']
-            # ZnCIR=data['Zn']
-            # PnCIR = data['Pn']
-            # YnCIR = data['Yn']
-            # default_intensityCIR = data['default_intensity']
-            # CDS_cirCIR = data['CDS_cir']
+            filepath = os.path.join(directory, f"Kalman_resultsCIR_Xdim{i}.npz")
+            data = np.load(filepath)
+            final_paramCIR=data['final_param']
+            XnCIR=data['Xn']
+            ZnCIR=data['Zn']
+            PnCIR = data['Pn']
+            YnCIR = data['Yn']
+            default_intensityCIR = data['default_intensity']
+            CDS_cirCIR = data['CDS_cir']
 
             # # Example usage:
-            # print_model_params("CIR", final_paramCIR, m=i)
+            print_model_params("CIR", final_paramCIR, m=i)
 
             # Loop through maturities and make a separate plot for each
             for j in range(XnLHC.T.shape[1]):
@@ -89,7 +89,7 @@ if __name__ == "__main__":
 
                 ax.plot(t, XnLHCK[:,j], "-", alpha=0.7, color='blue', label=f"LHC Kalman")
                 ax.plot(t, XnLHC.T[:,j], "-", alpha=0.7, color='red', label=f"LHC Filipovic")
-                # ax.plot(t, XnCIR[:,j], "-", alpha=0.7, color='green', label=f"CIR Kalman")
+                ax.plot(t, XnCIR[:,j], "-", alpha=0.7, color='green', label=f"CIR Kalman")
 
                 ax.grid(True)
                 ax.set_xlabel("Time (years)")
@@ -107,7 +107,7 @@ if __name__ == "__main__":
             fig, ax = plt.subplots(figsize=(10,6))
             ax.plot(t, Default_intensityLHCK , "-", alpha=0.7, color='blue', label=f"LHC Kalman")
             ax.plot(t, Default_intensityLHC , "-", alpha=0.7, color='red', label=f"LHC Filipovic")
-            # ax.plot(t, default_intensityCIR , "-", alpha=0.7, color='green', label=f"CIR Kalman")
+            ax.plot(t, default_intensityCIR , "-", alpha=0.7, color='green', label=f"CIR Kalman")
 
 
 
@@ -132,7 +132,7 @@ if __name__ == "__main__":
 
                 ax.plot(t, ZnLHCK[:,m], "-", alpha=0.7, color='blue', label="LHC Kalman")
                 ax.plot(t, CDS_LHC[:,m], "-", alpha=0.7, color='red', label="LHC Filipovic")
-                # ax.plot(t, CDS_cirCIR[:,m], "-", alpha=0.7, color='green', label="CIR Kalman")
+                ax.plot(t, CDS_cirCIR[:,m], "-", alpha=0.7, color='green', label="CIR Kalman")
                 ax.plot(t, CDS_obs[:,m], "o", alpha=0.5, color='black', label="Observations")
 
                 ax.grid(True)
@@ -151,7 +151,7 @@ if __name__ == "__main__":
             fig, ax = plt.subplots(figsize=(10,6))
             ax.plot(t, YnLHCK , "-", alpha=0.7, color='blue', label=f"LHC Kalman")
             ax.plot(t, YnLHC, "-", alpha=0.7, color='red', label=f"LHC Filipovic")
-            # ax.plot(t, YnCIR , "-", alpha=0.7, color='green', label=f"CIR Kalman")
+            ax.plot(t, YnCIR , "-", alpha=0.7, color='green', label=f"CIR Kalman")
 
 
             ax.grid()
@@ -168,8 +168,8 @@ if __name__ == "__main__":
             ### Compute Global measures of fit.
             # Stack together CDS frames
 
-            # models = [ZnLHCK,CDS_LHC,CDS_cirCIR] # stacked fitted CDS spreads.
-            models = [ZnLHCK,CDS_LHC] # stacked fitted CDS spreads.
+            models = [ZnLHCK,CDS_LHC,CDS_cirCIR] # stacked fitted CDS spreads.
+            # models = [CDS_LHC,CDS_cirCIR] # stacked fitted CDS spreads.
 
             gfm = global_fit_measures(CDS_obs, models)
 
@@ -179,8 +179,8 @@ if __name__ == "__main__":
             arpe_series, arpe = gfm.arpe()
 
             # Example structure:
-            # cols_names = [f"LHC Kalman,m={i}", f"LHC Filipovic,m={i}",f"CIR Kalman,m={i}"]
-            cols_names = [f"LHC Kalman,m={i}",f"LHC Filipovic,m={i}"]
+            cols_names = [f"LHC Kalman,m={i}", f"LHC Filipovic,m={i}",f"CIR Kalman,m={i}"]
+            # cols_names = [f"LHC Filipovic,m={i}",f"CIR Kalman,m={i}"]
 
             # Your NumPy arrays: (n_obs, n_models)
             # e.g. rmse_series.shape == (T, 3)
@@ -202,8 +202,8 @@ if __name__ == "__main__":
             # === 1) 4-panel figure with all models ===
             fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
             axes = axes.flatten()
-            # colors = {cols_names[0]:'blue',cols_names[1]:'red',cols_names[2]:'green'}
-            colors = {cols_names[0]:'red',cols_names[1]:'green'}
+            colors = {cols_names[0]:'blue',cols_names[1]:'red',cols_names[2]:'green'}
+            # colors = {cols_names[0]:'red',cols_names[1]:'green'}
 
             for ax, (label, df) in zip(axes, metrics):
                 for col in df.columns:

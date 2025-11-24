@@ -14,7 +14,7 @@ if __name__ == "__main__":
     firms = ['CMZB','DANBNK','MONTE', 'SVSKHB'] # IG,IG,HY,IG
     # Pivot
     # firms = [ 'DANBNK','MONTE', 'SVSKHB'] # IG,IG,HY,IG
-
+    # firms = ['SVSKHB']
 ### Section 1.1 LHC Filipociv
     # for firm in firms:
     #     test_df = sub_df[(sub_df['Ticker']==firm)]
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     #         print(f'Finised X_dim {X_dim}, firm {firm}')
 
 
-### SECTION 1.2: LHC KALMAN FITS
+## SECTION 1.2: LHC KALMAN FITS
     # for firm in firms:
     #     test_df = sub_df[(sub_df['Ticker']==firm)]
     #     test_df = test_df.pivot(index = ['Date','Ticker'],
@@ -143,14 +143,28 @@ if __name__ == "__main__":
 
         survival_kalman = survival[:,np.isin(t_mats_plots, mat_grid).flatten()]
         Gamma_kalman = Gamma[:,np.isin(t_mats_plots, mat_grid).flatten()]
-
+        Gamma_kalman_scale =Gamma_kalman / mat_grid[None, :]
 
         # Negative process. Multiply by -1 everywhere. Let A and a get these too.
-        for X_dim in [1,2,3]:# , 2]:
-            cir = CIRIntensity(r,delta,tenor,X_dim)
+        for X_dim in [2,3]:# , 2]:
+            cir = CIRIntensity(r,delta,tenor,X_dim,cascading=True)
             x0 = np.array([0])
-            params, Xn,Zn,Pn,se = cir.run_kalman_filter(t,t_mat_grid,Y=Gamma_kalman ,seed=2000)
+            # ll, params, Xn,Zn,Pn,se = cir.run_kalman_filter(t,t_mat_grid,
+            #                                             Y=Gamma_kalman_scale ,seed=2000)
+            directory = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}"
 
+            filepath = os.path.join(directory, f"Kalman_resultsCIR_Xdim{X_dim}.npz")
+            data = np.load(filepath)
+            params=data['final_param']
+            Xn=data['Xn']
+            Zn=data['Zn']
+            Pn = data['Pn']
+            Yn = data['Yn']
+            default_intensityCIR = data['default_intensity']
+            se = data['SE']
+            ll = data['log_likeli']
+
+            # CDS_cir = data['CDS_cir']
 
             # Set new optimal parameters too.
             cir.set_params(params)
@@ -159,11 +173,12 @@ if __name__ == "__main__":
             # With Params in place, we can utilize CIR class to do pricing, simulations etc.
             CDS_cir = np.zeros(survival_kalman.shape)
             for n in range(survival_kalman[:,0].shape[0]):
-                CDS_cir[n,:] = cir.cds_spread(Xn[n,:],params,t[n],t_mat_grid[:,n])
+                CDS_cir[n,:] = cir.cds_spread_fast(Xn[n,:],params,t[n],t_mat_grid[:,n])
                 print(f'Done with {(n+1)/survival_kalman[:,0].shape[0]} %')
 
             # Default intensity probability since inception (identical to state if dim=1)
-            default_intensity = np.sum(Xn,axis=1)
+            # default_intensity = np.sum(Xn,axis=1)
+            default_intensity = Xn[:,0]
 
             # Get induced default probability:
             Yn = np.exp(-np.cumsum(default_intensity*(t[1]-t[0]))) # only approximates
@@ -178,7 +193,8 @@ if __name__ == "__main__":
                     Yn = Yn,
                     default_intensity = default_intensity,
                     CDS_cir = CDS_cir,
-                    SE = se)
+                    SE = se,
+                    log_likeli = ll)
 
 
 

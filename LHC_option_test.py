@@ -35,7 +35,8 @@ lhc.build_P_params()
 # Then pricing. 
 T_option = 1 # Maturity of option. Also the start of CDS
 t_M = T_option + 5 # t_M = maturity of cds. 
-strike_spreads = np.array([250,300,350]) / 10000
+# strike_spreads = np.array([250,300,350]) / 10000
+strike_spreads = np.array([250]) / 10000
 # strike_spreads = np.array([25,50,100]) / 10000
 
 # Find model implied spread.
@@ -66,12 +67,12 @@ lhc_tuple = rebuild_lhc_struct(lhc.kappa, lhc.theta, lhc.gamma1[0], lhc.r, lhc.Y
 print(f'Model spread: {model_spread*10000}')
 
 price = lhc.get_cdso_price(t=0,t0=T_option,t_M=t_M,Y_t=1,X_t=X0,
-                           strikes = strike_spreads,n_max=14)
+                           strikes = strike_spreads,n_max=22) # 20 seems like enough
 print(f'Price options strikes {strike_spreads*10000}, prices: {price*10000}')
 
-N,M= 5000,1000
+N,M= 400000,100
 cdso_MC_hist,cdso_MC = lhc.get_cdso_price_MC(0,T_option,t_M,strike_spreads,chi0,N,M,seed=1000)
-print(f'Price options strikes {strike_spreads*10000}, prices: {cdso_MC*10000}')
+print(f'MC: Price options strikes {strike_spreads*10000}, prices: {cdso_MC*10000}')
 
 n_poly = np.array([1,5,30])
 

@@ -15,8 +15,8 @@ if __name__ == "__main__":
     #### Now callibrate and store each rate to get eficiently a surface:
     #### Preliminary investigation. 
     sub_df = pd.read_excel("./Data/subset_data.xlsx")
-    # firms = ['CMZB','DANBNK','MONTE', 'SVSKHB']
-    firms = ['MONTE']
+    firms = ['CMZB','DANBNK','MONTE', 'SVSKHB']
+    # firms = ['MONTE']
 
     # Loop over each firm in list.
     for firm in firms:

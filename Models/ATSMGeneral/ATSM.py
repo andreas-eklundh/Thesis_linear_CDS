@@ -72,11 +72,12 @@ class ATSM():
         ode_sol = solve_ivp(
             fun=primes,
             t_span=[0, T[-1]],   # integrate from 0 to max maturity
+            t_eval = T,# evaluate at all maturities
             y0=init_conds,
-            t_eval=T,            # evaluate at all maturities
-            method='RK45',
-            rtol=1e-06,
-            atol=1e-06
+            # t_eval=T,            # evaluate at all maturities
+            method='BDF',
+            rtol=1e-09,
+            atol=1e-09
         )
         self.beta = ode_sol.y[:beta_0.shape[0], :]   # shape (n_beta, n_maturities)
         self.alpha = ode_sol.y[-1, :]               # shape (n_maturities,)
