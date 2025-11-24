@@ -37,7 +37,7 @@ class CIRIntensity():
             # Default (short/med) factors
             self.kappa = rng.uniform(0.2, 0.8, size=(X_dim,))
             # Order. Mainly for identification to make sense. 
-            self.kappa = np.sort(self.kappa)[::-1]
+            # self.kappa = np.sort(self.kappa)[::-1]
             self.theta = rng.uniform(0.01, 0.4, size=(X_dim,))
 
             # Assume same for theta for id.
@@ -48,10 +48,10 @@ class CIRIntensity():
             self.lambda1 = np.zeros(X_dim) 
             for i in range(X_dim):
                 # self.lambda1[i] = rng.uniform(-self.kappa[i]*self.theta[i], self.kappa[i], 1) 
-                # self.lambda1[i] = rng.uniform(-1, self.kappa[i], 1) 
-                self.lambda1[i] = rng.uniform(-1, np.min(self.kappa), 1) 
+                self.lambda1[i] = rng.uniform(-1, self.kappa[i], 1) 
+                # self.lambda1[i] = rng.uniform(-1, np.min(self.kappa), 1) 
             # Sort
-            self.lambda1 = np.sort(self.lambda1)
+            # self.lambda1 = np.sort(self.lambda1)
             # initialise all positive. Note one can plug in same lambda is simplicity needed
             self.kappa_p,self.theta_p = self.build_P_drift(self.lambda1,np.zeros_like(self.lambda1))
             # Set sigma in feller grid.
@@ -372,7 +372,7 @@ class CIRIntensity():
                     K1[i, i+1] =  kappa_p[i] 
             X0 = np.cumsum(theta_p[::-1])[::-1]
             _,P0 = self.get_cond_var(-K1,
-                                     sigma**2*np.diag(np.cumsum(theta_p[::-1])[::-1]),0)
+                                     sigma**2*np.diag(X0),0)
 
         
         # CIR conditional Mean and Variance based on parameters.
@@ -414,13 +414,11 @@ class CIRIntensity():
         phis = []
         for i in range(0,unique_delta.shape[0]):
             if self.cascading:
-                # phi_0 = np.zeros(self.X_dim)
                 phi_0 =  kappa_p * theta_p * unique_delta[i]
-                # phi_0[-1] = kappa_p[-1] * theta_p[-1] * unique_delta[i]
                 phi_1 = np.identity(self.X_dim) + np.identity(self.X_dim) * (-kappa_p) *  unique_delta[i]
                 for j in range(self.X_dim):
                     if j + 1 < self.X_dim:
-                        phi_1[j, j+1] = kappa[j] *  unique_delta[i]
+                        phi_1[j, j+1] = kappa_p[j] *  unique_delta[i]
                 phis.append([phi_0,phi_1])
             else:
                 phi_0 =  (np.identity(kappa_P_diag.shape[0])-expm(-kappa_P_diag * unique_delta[i])) @ theta_p
@@ -560,16 +558,16 @@ class CIRIntensity():
         # cons.append(g4)
         # add identification constraint. Kappas decreasing.
         # if (self.X_dim>1) & (self.cascading == False):
-        g5 = np.asarray(kappa[:-1]-kappa[1:]+1e-3).flatten() # kappai <= kappa_{i-1}
-        cons.append(np.asarray(g5).flatten())
+        # g5 = np.asarray(kappa[:-1]-kappa[1:]+1e-3).flatten() # kappai <= kappa_{i-1}
+        # cons.append(np.asarray(g5).flatten())
 
         # if self.X_dim>1:
         #     g5 = np.asarray(theta[:-1]-theta[1:]+1e-3).flatten() # kappai <= kappa_{i-1}
         #     cons.append(np.asarray(g5).flatten())
         # We will do the same for theta. 
         # if  (self.X_dim>1) & (self.cascading == False):
-        g5 = np.asarray(lambda1[1:]-lambda1[:-1]+1e-3).flatten() # kappai <= kappa_{i-1}
-        cons.append(np.asarray(g5).flatten())
+        # g5 = np.asarray(lambda1[1:]-lambda1[:-1]+1e-3).flatten() # kappai <= kappa_{i-1}
+        # cons.append(np.asarray(g5).flatten())
         # concatenate both
         return np.concatenate(cons)  # length 2*d
 
@@ -586,11 +584,11 @@ class CIRIntensity():
         d = self.X_dim  # number of factors
         # Kappa and theta may be slightly larger than 1 presumably. 
         bounds = (
-            [(1e-6, 3)] * d +     # kappa
-            [(1e-6, 3)] * d +     # theta
+            [(1e-6, 2)] * d +     # kappa
+            [(1e-6, 2)] * d +     # theta
             [(1e-6, 2)] * d +     # sigma (assuming per-factor vol)
-            [(-1.5, 1.5)] * d +     # lambda1
-            [(1e-4, 0.001)]         # sigma_err
+            [(-1, 1)] * d +     # lambda1
+            [(1e-5, 0.005)]         # sigma_err
         )
         nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
 
@@ -601,11 +599,11 @@ class CIRIntensity():
             # args=(t_obs[::5], t_mat_grid[:,::5], Y[::5,:]),
             args=(t_obs, t_mat_grid, Y),
             strategy='best1bin',
-            popsize=20,         # larger popsize -> more exploration
-            maxiter=800,       # allow many generations    
+            popsize=20, #5, #20,         # larger popsize -> more exploration
+            maxiter=800, # 800,       # allow many generations    
             mutation=(0.8, 1.0),
             recombination=0.5,                  
-            tol=1e-6,            # looser tolerance
+            tol=1e-6,# 1e-6,            # looser tolerance
             # workers=1,
             # updating='immediate',            
             workers=-1,
@@ -992,7 +990,7 @@ class CIRIntensity():
         beta_vals = interp_struct['beta_interp'](tau)           # shape (len(tau), X_dim)
         # vectorized dot: (len(tau), X_dim) @ (X_dim,) -> (len(tau),)
         
-        expo = alpha_vals + np.einsum('ij,j->i', beta_vals, lam)
+        expo = alpha_vals  + beta_vals @ lam 
         return np.exp(expo)
 
 
@@ -1001,7 +999,7 @@ class CIRIntensity():
         alpha_x_vals = interp_struct['alpha_x_interp'](tau)     # (len(tau),)
         beta_x_vals = interp_struct['beta_x_interp'](tau)       # (len(tau), X_dim)
         # The einsum is to get it for each lamba
-        return alpha_x_vals + np.einsum('ij,j->i', beta_x_vals, lam)  # (len(tau),)
+        return alpha_x_vals + beta_x_vals @ lam  # (len(tau),)
 
 
     # Vectorized fast legs (replace your old calc_* with these)
