@@ -9,6 +9,7 @@ import re
 from numpy.polynomial.legendre import legval,Legendre
 from Models.moments import MultivariatePolynomialGenerator as mpg
 import sympy as sp
+import time
 
 from scipy.optimize import lsq_linear
 from numba import njit, float64, int64
@@ -776,18 +777,19 @@ def calc_gamma1(kappa, theta, lambda_i=None):
     Lambda fct is only legacy. just plug in values for kappa_p,thetap when needed. 
     '''
     # Get stationary lambda1. 
-    stationary_spread = 5 / 10000
-    # NOTE: hard coded recovery rate. cant be bothered to expand at this point
-    lambda_bar1 = stationary_spread #/ (1-0.4)
-    m = len(kappa)
-    if lambda_i is None:
-        lambda_i = np.zeros(m)
-    prod = 1.0
-    for j in range(m):
-        prod *= kappa[j] * theta[j] / (lambda_bar1 - (kappa[j]-lambda_i[j]))
-    gamma1 = lambda_bar1 / (((-1)**m) * prod)
+    # stationary_spread = 5 / 10000
+    # # NOTE: hard coded recovery rate. cant be bothered to expand at this point
+    # lambda_bar1 = stationary_spread #/ (1-0.4)
+    # m = len(kappa)
+    # if lambda_i is None:
+    #     lambda_i = np.zeros(m)
+    # prod = 1.0
+    # for j in range(m):
+    #     prod *= kappa[j] * theta[j] / (lambda_bar1 - (kappa[j]-lambda_i[j]))
+    # gamma1 = lambda_bar1 / (((-1)**m) * prod)
 
     # Solve only for admissible range
+    gamma1 = theta[0] / 2
     return np.array([gamma1])
 
 
@@ -926,8 +928,6 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
             Pn_n = np.ascontiguousarray(Pn[n,:,:])
             pred_Pn =  P_cov @ Pn_n @ P_cov.T + Q_k
 
-            ## Unscented Kalam prediciton.
-            # pred_Xn, pred_Pn = ukf_predict_step(Xn_n,Pn_n,lhc_p,Delta,Sigma,drift_term)
 
 
     return log_likelihood, Xn, Zn, Pn
@@ -1047,12 +1047,12 @@ def nonlinear_constraints( params, m):
     # g6 = np.minimum(kappa_bound,kappas) - gamma1 # Upper cound on gamma1
     # cons.append(np.asarray(g6).flatten())
     # Assuming increasing gamma.
-    for i in range(m):
-        if i == m-1:
-            g6 = kappa[i] - 1e-4
-        else:
-            g6 = kappa[i] - kappa[i+1] + 1e-4
-        cons.append(np.asarray(g6).flatten())
+    # for i in range(m):
+    #     if i == m-1:
+    #         g6 = kappa[i] - 1e-4
+    #     else:
+    #         g6 = kappa[i] - kappa[i+1] + 1e-4
+    #     cons.append(np.asarray(g6).flatten())
 
     cons = np.concatenate(cons, dtype=float)
 
@@ -1099,7 +1099,7 @@ class LHC_single():
         self.r = r                  # Set short rate
         self.delta = delta          # Set recovery rate
         self.tenor = cds_tenor      # Set Swap tenor/payments structure.
-
+        self.stationary_lambda = 5 / 10000 # assume long term/stationry default intensity is 5bps
 
     def initialise_LHC(self, Y_dim, X_dim,X0, rng=None):
         if rng is None:
@@ -1109,14 +1109,25 @@ class LHC_single():
         self.X0 = X0
         self.a = np.ones((self.Y_dim,1))                                      # Y dim is 1 for LHC
         # Set inital values. Need to comply with (38)
-        # Then draw kappa.
-        self.kappa = rng.uniform(0,2, size=(X_dim,))       # Kappa given
+        # Then draw kappa. lower bounded by asymption now
         # Sort descending.
         # self.kappa = np.sort(self.kappa)[::-1] # Sort descending
         # self.theta = np.ones(X_dim) * 0.4
         # Same interpretation for 1d-case. For multi dim case - Slightly dif
         # For 1-d case, product of kappa theta needs to equal lambda1
-        self.theta = rng.uniform(0.01, 1 , size=(X_dim,))
+        # self.theta = rng.uniform(0.01, 1 , size=(X_dim,))
+        # Assumption to ensure proper initilialization.
+        # Draw kappa1,theta1
+        self.kappa = np.zeros(X_dim)
+        self.kappa[0] = rng.uniform(self.stationary_lambda,1, size=(1,))       # Kappa given
+        self.theta = np.zeros_like(self.kappa)
+        self.theta[0] = rng.uniform(0.01, 1 / (1 + self.kappa[0]/2) , size=(1,))
+        # Draw remaining thetas:
+        self.kappa[1:] = rng.uniform(self.theta[0]/2,1, size=(X_dim-1,))
+        # Finally draw theta
+        if X_dim > 1:
+            self.theta[1:] = rng.uniform(0.0001, 1 - self.theta[0] / (2*self.kappa[1:]) , size=(X_dim-1,))
+
         # self.theta = np.sort(self.theta)[::-1] # Sort descending
 
         # self.theta = lambda_bar1 / self.kappa
@@ -1408,12 +1419,13 @@ class LHC_single():
         #     }
         # )
         bounds = (
-                [(1e-6, 2)] * self.m +     # kappa
+                [(self.stationary_lambda, 1)] * self.m +     # kappa
                 [(1e-6, 1)] * self.m      # theta
                 # [(1.e-6,1)]         # gamma1
                 )
         constraints = NonlinearConstraint(lambda x: self.build_constraints(x), 0, np.inf)
 
+        # Dont add too much here. Quite quick at finding desired.
         result = differential_evolution(
             func= self.objective,
             x0=flat_init, # Maybe initial value is wrong here?
@@ -1422,10 +1434,11 @@ class LHC_single():
             args = (t_obs[::5],  T_M_grid[:,::5], CDS_obs[::5,:]),
             # args = (t_obs, T_M_grid, CDS_obs),
             strategy='best1bin',
-            popsize=6, # 20 in prod,
+            popsize=20, #6, # 20 in prod,
             mutation=(0.7, 1.0),
             recombination=0.9,
-            maxiter=100, #500 in prod
+            maxiter=500, #100, # 500 in prod
+            tol=1e-5,
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1582,16 +1595,17 @@ class LHC_single():
     def calc_gamma1(self,kappa, theta, lambda_i=None):
         # Get stationary lambda1. 
         stationary_spread = 5 / 10000
-        lambda_bar1 = stationary_spread #/ (1-self.delta)
-        m = len(kappa)
-        if lambda_i is None:
-            lambda_i = np.zeros(m)
-        prod = 1.0
-        for j in range(m):
-            prod *= kappa[j] * theta[j] / (lambda_bar1 - (kappa[j]-lambda_i[j]))
-        gamma1 = lambda_bar1 / (((-1)**m) * prod)
+        # lambda_bar1 = stationary_spread #/ (1-self.delta)
+        # m = len(kappa)
+        # if lambda_i is None:
+        #     lambda_i = np.zeros(m)
+        # prod = 1.0
+        # for j in range(m):
+        #     prod *= kappa[j] * theta[j] / (lambda_bar1 - (kappa[j]-lambda_i[j]))
+        # gamma1 = lambda_bar1 / (((-1)**m) * prod)
 
-        # Solve only for admissible range
+        # # Solve only for admissible range
+        gamma1 = theta[0] / 2
         return np.array([gamma1])
 
 
@@ -1602,21 +1616,21 @@ class LHC_single():
         t0 = t_obs
         if self.m == 1:
             bounds = (
-                [(1e-6, 2)] * m +     # kappa
+                [(self.stationary_lambda, 2)] * m +     # kappa
                 [(1e-6,1)] * m +     # eta=theta*gamma1. Same bounds.
                 # [(0.0001,1)] +        # gamma1
                 [(-1, 1)] * m  +         # lambda_p
                 [(1e-6, 1)] * m +     # sigma
-                [(1e-6, 0.005)]         # sigma_err. Unrealistic measure noise is more than 50 Bps
+                [(1e-6, 0.0005)]         # sigma_err. Unrealistic measure noise is more than 5 Bps
             )
         else:
             bounds = (
-                [(1e-6, 2)] * m +     # kappa - slightly higher bound
+                [(self.stationary_lambda, 1)] * m +     # kappa. Set to 1
                 [(1e-6, 1)] * m +     # eta=theta*gamma1. Same bounds.
                 # [(0.0001,1)] +        # gamma1
                 [(-1, 1)] *(m)  +     # lambda_p
                 [(1e-6, 1)] * m +     # sigma
-                [(1e-5, 0.005)]         # sigma_err
+                [(1e-5, 0.005)]         # sigma_err - very small
             )
         nlc = NonlinearConstraint(lambda x: nonlinear_constraints(x,self.m), 0, np.inf)
         # theta_index = m   # Index of theta[0]
@@ -1645,10 +1659,11 @@ class LHC_single():
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
 
             strategy='best1bin',
-            popsize=6, # 20 in prod,
+            popsize=20, #6, # 20 in prod,
             mutation=(0.7, 1.0),
             recombination=0.9,
-            maxiter=100, # 500 in prod
+            maxiter=500, #100, # 500 in prod
+            tol=1e-5,
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1721,8 +1736,10 @@ class LHC_single():
         # Get SE
         kalman_args = (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0)
         se = self.kalman_SE(params_opt=optim_params,f_args=kalman_args,eps = 1e-9)
-
-        return optim_params, Xn, Zn, Pn, se
+        ll = self.kalman_obj
+        
+        out_params = np.append(params_q,params_p)
+        return out_params, Xn, Zn, Pn, se, -ll
 
     def run_n_kalmans(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20):
         # Define grid of values.
@@ -1739,7 +1756,7 @@ class LHC_single():
             # Set the error to be the Stddeviation of CDS_obs
             # Flatten for scipy.
             x0_Q = self.flatten_params()
-            x0_Q = x0_Q[:-1] # No longer gamma interesting.
+            # x0_Q = x0_Q[:-1] # No longer gamma interesting.
             x0_P = np.concatenate([
                 self.lambda_i.flatten(),
                 self.sigma.flatten(),
@@ -1747,16 +1764,17 @@ class LHC_single():
             ])
 
             x0 = np.concatenate([x0_Q,x0_P])
-            params_p = x0[2*self.m:]
-            params_q = x0[:2*self.m]
+            params_p = x0[2*self.m+1:]
+            params_q = x0[:2*self.m+1]
+            # This still takes on the full vector of params
             lhc_p,lambda_i, sigma, sigma_err = build_P_params(params_p,params_q,lhc_p)
             # kappa, theta, gamma1 = params_q[:self.m],params_q[self.m:2*self.m], params_q[-1]
             kappa, theta = params_q[:self.m],params_q[self.m:2*self.m]
 
             # Test several random points.
-            optim_params,  Xn,Zn, Pn,se= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0, base_seed=base_seed + i)
+            optim_params,  Xn,Zn, Pn,se,ll= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0, base_seed=base_seed + i)
         # Set new optimal parameters.
-        return  optim_params,  Xn,Zn, Pn,se
+        return  optim_params,  Xn,Zn, Pn,se,ll
 
 
     ### Standar error calculation. Run outside as comp needed for each
@@ -2028,27 +2046,19 @@ class LHC_single():
             default_event =  S <= U
             if np.any(default_event):
                 # In this instance, default has happened as some point. Find index.
-                idx = np.argmax(np.where(default_event))
+                idx = np.argmax(default_event==1)
                 # Get path maximum up to the point:
                 max_cds_to_default = np.max(CDS_sim[:idx+1])
-                for b_idx in range(N_strikes):
-                    if max_cds_to_default >= barriers[b_idx]:
-                        # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
-                        prices[i,b_idx] = np.exp(-self.r * (T - t))
-                    else:
-                        # If not above, there is zero payoff.
-                        prices[i,b_idx] = 0
+                b_idx = np.where(max_cds_to_default >= barriers)
+                prices[i,b_idx] = np.exp(-self.r * (T - t))
+
             # Else - no default happened, but same logic as before.
             else:
                 # Get path maximum up to expiry:
                 max_cds_to_default = np.max(CDS_sim)
-                for b_idx in range(N_strikes):
-                    if max_cds_to_default >= barriers[b_idx]:
-                        # In this case, there is a payoff of 1, discount back from expiry(pay date) to today
-                        prices[i,b_idx] = np.exp(-self.r * (T - t))
-                    else:
-                        # If not above, there is zero payoff.
-                        prices[i,b_idx] = 0
+                b_idx = np.where(max_cds_to_default >= barriers)
+                prices[i,b_idx] = np.exp(-self.r * (T - t))
+
             prices_MC_hist[i, :] = np.mean(prices[:i+1, :], axis=0)
             seed += 1
         print(f'Digital done')
@@ -2355,41 +2365,15 @@ class LHC_single():
 
     #### Compute expected value and c_pi according to Lemma 4.4
 
-    # can work for n=1
-    def moments_Z(self,alphas,t,t0,t_M,k,y,X,n_max,basis,basis_class,G_n,chi_syms):
-        ### Loop over alpha indices. These correspond to desired basis.
-        ### Compute CDS spread moments.
-        psi_cds_vec = self.psi_cds(t0,t0,t_M,k)
-        moments = np.zeros(n_max+1)
-
-        # moment loop wrapped in numba
-        for n in range(0,n_max + 1):
-            # Find cols of alphas that should be summed.
-            idx_sum = np.where(np.sum(alphas,axis=0)==n)[0]
-            alphas_comp = alphas[:,idx_sum]
-
-            for idx in range(alphas_comp.shape[1]):
-                poly, chi_ennum = self.h_poly(alphas_comp[:,idx],y,X,chi_syms)
-                c_pi_val = c_pi(alphas_comp[:,idx],psi_cds_vec)
-                # Get the index of the expectation to compute. Generally works for cond exp
-                e_i = np.zeros(shape = len(basis_class))
-                e_i[basis_class.index(chi_ennum)] = 1
-                term = basis.T @ expm(G_n*(t0-t)) @ e_i
-
-                moments[n] += c_pi_val * term
-
-        return moments
-
     def get_cdso_price(self,t,t0,t_M,Y_t,X_t,strikes,n_max):
         # Get matrix of a_coeffs
         prices = np.zeros(strikes.shape[0])
         moments = np.ones((strikes.shape[0],n_max+1))
         alphas = self.compute_enumerations(m=self.m, n=n_max)
-
-        ### Precompute a lot of heavy stuff.
-        # get the index vector
         chi_syms = sp.symbols(f'Y X1:{self.m+1}')
         chi_sym = sp.Matrix(chi_syms)
+        ### Precompute a lot of heavy stuff.
+        # get the index vector
         a = self.A @ chi_sym
         sigma_ext = sp.Matrix([0, *self.sigma])   # prepend 0 symbolically
         diag_entries = [sp.sqrt(chi_sym[i] * (chi_sym[0] - chi_sym[i])) * sigma_ext[i] for i in range(self.m+1)]
@@ -2397,18 +2381,30 @@ class LHC_single():
         # As second term in drift, need monomials to fourth degree.
         polyclass = mpg(a, b, chi_sym, max_degree=n_max)
         ### Get moment matrices
+        start = time.time()
         G_n = polyclass.generator_matrix()
+        end = time.time()
+        print(f"Time of G_N {end-start}")
+        mat_expo = expm(G_n*(t0-t))
         chi0 =  np.append([Y_t],X_t)
         chi_dict = dict(zip(chi_syms,chi0))
         basis = polyclass.basis_mat.subs(chi_dict).evalf()
 
+        # Create touple with alphas and indices
+        idx_col_map = np.zeros(alphas.shape[1])
+        for cols in range(alphas.shape[1]):
+            poly, chi_ennum = self.h_poly(alphas[:,cols],Y_t,X_t,chi_syms)
+            idx_col_map[cols]  = polyclass.basis.index(chi_ennum)
+
+        lhc = rebuild_lhc_struct(self.kappa,self.theta,self.gamma1[0],self.r,self.Y_dim,
+                                 self.delta,self.tenor,self.lambda_i)
         for i,k in enumerate(strikes):
             # Loop from 0 to n+1 (n)
             b_min,b_max = self.get_bBounds(t0, t_M,k)
             legendre_coeff = self.get_scaled_legendre_coeffs(n_max,b_min,b_max)
-            moments[i,:] = self.moments_Z(alphas,t,t0,t_M,k,y=Y_t,X=X_t,n_max=n_max,
-                                          basis=basis,basis_class=polyclass.basis,
-                                          G_n=G_n,chi_syms=chi_syms)
+            moments[i,:] = moments_Z(alphas,t,t0,t_M,k,y=Y_t,X=X_t,n_max=n_max,
+                                          basis=np.array(basis,dtype = float),
+                                          mat_expo=mat_expo,idx_col_map=idx_col_map,lhc=lhc)
             # Finally do the legendre approximatino
             for j in range(n_max+1):
                 f_j = self.f_n(j,t,t0,b_min,b_max,Y_t)
@@ -2442,3 +2438,37 @@ def c_pi(alpha,psi_cds_val):
             alpha_minus[i] -= 1
             c += psi_cds_val[i] * c_pi(alpha_minus, psi_cds_val)
     return c
+
+
+# can work for n=1
+@njit
+def moments_Z(alphas,t,t0,t_M,k,y,X,n_max,basis,mat_expo,idx_col_map,lhc):
+    ### Loop over alpha indices. These correspond to desired basis.
+    ### Compute CDS spread moments.
+    # psi_cds_vec = self.psi_cds(t0,t0,t_M,k)
+    psi_cds_vec = psi_cds(lhc,t0,t0,t_M,k)
+
+    moments = np.zeros(n_max+1)
+
+    # moment loop wrapped in numba
+    for n in range(0,n_max + 1):
+        # Find cols of alphas that should be summed.
+        idx_sum = np.where(np.sum(alphas,axis=0)==n)[0]
+        alphas_comp = alphas[:,idx_sum]
+
+        for idx in range(alphas_comp.shape[1]):
+            # poly, chi_ennum = self.h_poly(alphas_comp[:,idx],y,X,chi_syms)
+            c_pi_val = c_pi(alphas_comp[:,idx],psi_cds_vec)
+            # Get the index of the expectation to compute. Generally works for cond exp
+            # e_i = np.zeros(shape = len(basis_class))
+            e_i = np.zeros(shape = basis.shape[0])
+
+            # e_i[basis_class.index(chi_ennum)] = 1
+            e_i[np.int16(idx_col_map[idx_sum[idx]])] = 1
+
+            term = basis.T @ mat_expo @ e_i
+
+            moments[n] += c_pi_val * term[0]
+
+    return moments
+

@@ -21,6 +21,9 @@ class MultivariatePolynomialGenerator:
         # store a matrix to do calculations.
         self.basis_mat = sp.Matrix(self.basis)
 
+        # Precompute the hessian and gradient first.
+        self.basis_grad = [sp.Matrix([sp.diff(f, zi) for zi in self.z]) for f in self.basis]
+        self.basis_hess = [sp.hessian(f, self.z) for f in self.basis]
         
     def _monomial_basis(self):
         """Generate all monomials up to total degree max_degree."""
@@ -43,6 +46,12 @@ class MultivariatePolynomialGenerator:
         return (sp.Matrix(self.a).dot(grad)
                 + 0.5 * sp.trace(self.Q * hess))
 
+    def L_optimized(self, j):
+        """Generator operator Lf for basis element j, using precalculated derivatives."""
+        grad = self.basis_grad[j]
+        hess = self.basis_hess[j]
+        return (sp.Matrix(self.a).dot(grad) + 0.5 * sp.trace(self.Q * hess))
+
     def generator_matrix(self):
         """Compute sparse generator matrix G such that L(H) = H * G"""
         N = len(self.basis)
@@ -50,7 +59,8 @@ class MultivariatePolynomialGenerator:
         data = {}  # {(i, j): coeff}
 
         for j, f in enumerate(self.basis):
-            Lf = sp.expand(self.L(f))
+            # Lf = sp.expand(self.L(f))
+            Lf = self.L_optimized(j)
             poly = sp.Poly(Lf, *self.z)
             for monom, c in poly.terms():
                 mon_expr = sp.Mul(*[z**p for z, p in zip(self.z, monom)])

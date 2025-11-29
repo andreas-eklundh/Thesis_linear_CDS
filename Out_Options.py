@@ -15,7 +15,7 @@ if __name__ == "__main__":
     #### Preliminary investigation.
     sub_df = pd.read_excel("./Data/subset_data.xlsx")
     firms = ['CMZB','DANBNK','MONTE', 'SVSKHB'] # IG,IG,HY,IG
-    firms = ['CMZB','DANBNK','MONTE']#, 'SVSKHB'] # IG,IG,HY,IG
+#     firms = ['CMZB','DANBNK','MONTE']#, 'SVSKHB'] # IG,IG,HY,IG
 
     # Pivot
 
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     from Result_plots import print_model_params
 
-    X_dims = [1] # [1,2,3]
+    X_dims = [1,2] # [1,2,3]
     # X_dims = [1,2,3]
     for firm in firms:
         test_df = sub_df[(sub_df['Ticker']==firm)]
@@ -100,13 +100,15 @@ if __name__ == "__main__":
 
             # Then strikes around the above. Say PM 150 Bps.
             # strike_diff_grid = np.linspace(-60,60,20) / 10000
-            strike_diff_grid = np.linspace(-40,80,int((80+40)/20)+1) / 10000
+            strike_diff_grid = np.linspace(-40,120,int((120+40)/20)+1) / 10000
             strikes = (cds0 + strike_diff_grid).flatten()
             # Set Simulate option sizes.
             chi0 = np.concatenate((np.array([YnLHCK[-1]]), XnLHCK[-1,:]))
-            # Set discretization and number of simul
-            N, M = 100,500
-            # N, M = 1000,3000
+            # Set discretization and number of simul. 1m simuls, fairly coarse grid
+        #     N, M = 1e6, 200
+            N, M = 20000,100
+            seed = 2000
+            leg_deg = 18
 
             ### Get CDSO using theoretical values.
             # Note, we need to discound too, see top vof p. 19
@@ -116,24 +118,23 @@ if __name__ == "__main__":
             # print(f'Test: Actual CDSO price {cdso_actual}')
             # print(f'Test: MC CDSO price {cdso_MC}')
             # Must assume it to be correct. 
-            leg_deg = 10
             cdso_actual = lhc.get_cdso_price(t_now,t0,t_mat,chi0[0],chi0[1:],strikes,n_max=leg_deg)
-            cdso_MC_hist,cdso_MC = lhc.get_cdso_price_MC(t_now,t0,t_mat,strikes,chi0,N,M,seed=1000)
+            cdso_MC_hist,cdso_MC = lhc.get_cdso_price_MC(t_now,t0,t_mat,strikes,chi0,N,M,seed=seed)
             # N, M = 100,500
 
             ######### DIGITAL OPTION PRICING. ##############
             # Define Barriers as some percentage of the CDS at current timepoint.
-            barriers_percentage = np.array([(1+i*0.025) for i in range(1,20+1)])
+            barriers_percentage = np.array([(1+i*0.05) for i in range(1,11)])
             barriers = cds0*barriers_percentage
-            T_mat_barrier = t0 + (t_mat-t0)/2 # Matures halfway trough the CDS
+            T_mat_barrier = t_now + (t0-t_now)/2 # Matures halfway to the CDS
             digital_MC_hist,digital_MC = lhc.get_digital_barrier_price_MC(t_now,t0,t_mat,T_mat_barrier,barriers,
-                                                                        chi0,N,M,seed=1000)
+                                                                        chi0,N,M,seed=seed)
 
 
             ######### Lookback OPTION PRICING. ##############
             # Consider CDS at expiry.
             look_MC_hist,look_MC,look_cds_min =  lhc.get_lookback_price_MC(t_now,t0,t_mat,T_mat_barrier,
-                                                                        chi0,N,M,seed=1000)
+                                                                        chi0,N,M,seed=seed)
 
 
 
@@ -146,7 +147,7 @@ if __name__ == "__main__":
 
 
             ### CDSO pricing in CIR Model.
-            cir = CIRIntensity(r,delta,tenor,X_dim)
+            cir = CIRIntensity(r,delta,tenor,X_dim,cascading=True)
             X_cir_now = XnCIR[-1,:] # Want to predict forward in time.
             cir.set_params(final_paramCIR)
 
@@ -154,29 +155,28 @@ if __name__ == "__main__":
             # Strike grid. Base around forward spread
             # We consider this setup
             # Get spot CDS rate
-            cds0_CIR = cir.calc_CDS(final_paramCIR,t_now,t_mat-t0,X_cir_now,t0=t_now)
+        #     cds0_CIR = cir.calc_CDS(final_paramCIR,t_now,t_mat-t0,X_cir_now,t0=t_now)
 
-            print(f"CIR Spread {cds0_CIR}, LHC spread {cds0_lhc}, Observed {cds0}")
-
-            # Numba approximation check.
-            cds0_CIR_n = calc_cds(final_paramCIR,t_now,t_mat-t0,X_cir_now,
-                                t_now,cir.r,cir.delta,cir.tenor,cir.X_dim)
-            print(f'CIR Spread {cds0_CIR}, CIR Spread Numba {cds0_CIR_n}')
+        #     print(f"CIR Spread {cds0_CIR}, LHC spread {cds0_lhc}, Observed {cds0}")
+        #     # For 1-d compare fast vs actual
+        #     cds0_CIR_n = cir.cds_spread_fast(X_cir_now,final_paramCIR,t_now,np.array([t_mat-t0]),t0=t_now)
+        #     # Seems about right.
+        #     print(f'CIR Spread {cds0_CIR}, CIR Spread fast {cds0_CIR_n}')
 
             # Then strikes around the above. Say PM 150 Bps.
             # Set discretization and number of simul
             cdso_MC_hist_cir,cdso_MC_cir = cir.get_cdso_pric_MC(final_paramCIR,t_now,t0,t_mat,
-                                                                strikes,XnCIR[-1,:],N,M,seed=1000)
+                                                                strikes,XnCIR[-1,:],N,M,seed=seed)
 
             digital_MC_hist_cir,digital_MC_cir = cir.get_digital_barrier_price_MC(final_paramCIR,t_now,t0,t_mat,T_mat_barrier,barriers,
-                                                                        XnCIR[-1,:],N,M,seed=1000)
+                                                                        XnCIR[-1,:],N,M,seed=seed)
 
 
 
             ######### Lookback OPTION PRICING. ##############
             # Consider CDS at expiry.
             look_MC_hist_cir,look_MC_cir,look_cds_min_cir =  cir.get_lookback_price_MC(final_paramCIR,t_now,t0,t_mat,T_mat_barrier,
-                                                                        XnCIR[-1,:],N,M,seed=1000)
+                                                                        XnCIR[-1,:],N,M,seed=seed)
 
             print(f'Lookback price LHC: {look_MC*10000}')
             print(f'Lookback price CIR: {look_MC_cir*10000}')
@@ -217,8 +217,11 @@ if __name__ == "__main__":
             cdso_MC_bps_cir = cdso_MC_cir * 1e4
             cdso_MC_hist_bps_cir = cdso_MC_hist_cir * 1e4
             # cdso_MC_bps_cir_fourier = cdso_fourier * 1e4
+        
+            save_path = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Chapter7/Options"
 
-            save_path = directory + f"/Options"
+        #     save_path = directory + f"/Options"
+            
             os.makedirs(save_path, exist_ok=True)
 
             # --- Plot 1: Price vs Strike Offset ---
@@ -236,7 +239,7 @@ if __name__ == "__main__":
             ax1.legend(fontsize=8, loc='best')
 
             fig1.tight_layout()
-            fig1.savefig(os.path.join(save_path, "CDSO_MC_vs_Strike.png"), dpi=150)
+            fig1.savefig(os.path.join(save_path, f"CDSO_MC_vs_Strike_{firm}_m{i}.png"), dpi=150)
             plt.close(fig1)
 
             # --- Plot 2: Monte Carlo Convergence (diagnostic) ---
@@ -256,7 +259,7 @@ if __name__ == "__main__":
             ax2.grid(True)
 
             fig2.tight_layout()
-            fig2.savefig(os.path.join(save_path, "CDSO_MC_convergenceLHC.png"), dpi=150)
+            fig2.savefig(os.path.join(save_path, f"CDSO_MC_convergenceLHC_{firm}_m{i}.png"), dpi=150)
             plt.close(fig2)
 
 
@@ -276,7 +279,7 @@ if __name__ == "__main__":
             ax3.grid(True)
 
             fig3.tight_layout()
-            fig3.savefig(os.path.join(save_path, "CDSO_MC_convergenceCIR.png"), dpi=150)
+            fig3.savefig(os.path.join(save_path, f"CDSO_MC_convergenceCIR_{firm}_m{i}.png"), dpi=150)
             plt.close(fig3)
 
 
@@ -296,7 +299,7 @@ if __name__ == "__main__":
             ax1.legend(fontsize=8, loc='best')
 
             fig1.tight_layout()
-            fig1.savefig(os.path.join(save_path, "Digital_MC_vs_Strike.png"), dpi=150)
+            fig1.savefig(os.path.join(save_path, f"Digital_MC_vs_Strike_{firm}_m{i}.png"), dpi=150)
             plt.close(fig1)
 
             # --- Plot 2: Monte Carlo Convergence (diagnostic) ---
@@ -316,7 +319,7 @@ if __name__ == "__main__":
             ax2.grid(True)
 
             fig2.tight_layout()
-            fig2.savefig(os.path.join(save_path, "Digital_MC_convergenceLHC.png"), dpi=150)
+            fig2.savefig(os.path.join(save_path, f"Digital_MC_convergenceLHC_{firm}_m{i}.png"), dpi=150)
             plt.close(fig2)
 
 
@@ -336,7 +339,7 @@ if __name__ == "__main__":
             ax3.grid(True)
 
             fig3.tight_layout()
-            fig3.savefig(os.path.join(save_path, "Digital_MC_convergenceCIR.png"), dpi=150)
+            fig3.savefig(os.path.join(save_path, f"Digital_MC_convergenceCIR_{firm}_m{i}.png"), dpi=150)
             plt.close(fig3)
 
 
@@ -366,7 +369,7 @@ if __name__ == "__main__":
             ax2.legend(fontsize=8, loc='best')
             ax2.grid(True)
             fig2.tight_layout()
-            fig2.savefig(os.path.join(save_path, "Lookback_MC_convergence.png"), dpi=150)
+            fig2.savefig(os.path.join(save_path, f"Lookback_MC_convergence_{firm}_m{i}.png"), dpi=150)
             plt.close(fig2)
 
 
@@ -382,9 +385,9 @@ if __name__ == "__main__":
                     label='LHC Model', color='tab:orange', edgecolor='black')
 
             # Axis labels and title
-            ax4.set_xlabel("Lookback Option Price (bps)")
+            ax4.set_xlabel("Minimum CDS (bps)")
             ax4.set_ylabel("Density")
-            ax4.set_title("Distribution of Lookback Option Prices")
+            ax4.set_title("Distribution of Minimum CDS spreads")
 
             # Add legend and grid
             ax4.legend(fontsize=8, loc='best')
@@ -392,6 +395,32 @@ if __name__ == "__main__":
 
             # Tight layout and save
             fig4.tight_layout()
-            fig4.savefig(os.path.join(save_path, "Lookback_Distribution_Comparison.png"), dpi=150)
+            fig4.savefig(os.path.join(save_path, f"Lookback_Distribution_Comparison_{firm}_m{i}.png"), dpi=150)
             plt.close(fig4)
 
+        ### Save option output.
+        
+            filepath = os.path.join(directory, f"Option_data_{firm}_X{i}.npz")
+
+        # Ensure directory exists
+            os.makedirs(directory, exist_ok=True)
+
+            np.savez(filepath,
+                cdso_poly=cdso_actual,
+                cdso_lhc_MC=cdso_MC,
+                cdso_cir_MC=cdso_MC_cir,
+                digital_lhc=digital_MC,
+                digital_cir_MC=digital_MC_cir,                
+                look_MC_lhc=look_MC,
+                look_MC_cir=look_MC_cir,   
+                look_lhc_min = look_cds_min,            
+                look_cir_min = look_cds_min_cir,            
+                cdso_strikes = strikes,
+                digital_barriers = barriers,
+                cds_obs = cds0
+             )
+            
+
+
+
+# Redo Plots but include both Xdims

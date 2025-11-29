@@ -50,7 +50,7 @@ X_dim = 3
 #### Numerical test of CIR example.
 cir = CIR(r=0.0252,delta=0.4,tenor=0.25,X_dim=X_dim,cascading=True)
 X0=np.array([0.07,0.07,0.07])
-T,t=10e6,0
+T,t=5,1
 delta = T-t         
 
 
@@ -67,19 +67,35 @@ pmg = MPG(drift, diffusion, chi_sym, max_degree=2)
 
 G_n = pmg.generator_matrix()
 chi_dict = dict(zip(chi_syms, X0))
-E_sympy = pmg.calculate_expected(chi_dict,delta)
+E_sympy_inf = pmg.calculate_expected(chi_dict,10e6)
 print(f'Actual expectation {- np.linalg.inv(cir.K1) @ (cir.theta*cir.kappa)}')
 print(f'Actual expectation2 {np.cumsum(cir.theta[::-1])[::-1]}')
 
+print(f'Sympy expectation {E_sympy_inf}')
+
+
+### Conditional expectation
+E_sympy = pmg.calculate_expected(chi_dict,delta)
+print(f'Actual expectation { (expm(cir.K1*delta) @ X0 -
+    np.linalg.inv(cir.K1) @ (np.identity(cir.X_dim)-expm(cir.K1*delta))@ (cir.K0))}')
 print(f'Sympy expectation {E_sympy}')
 
-# Covariance
-cov_symp = pmg.calculate_cov(chi_dict,delta)
-print(f'Cascading Sympy Cov {cov_symp}')
 
+
+# Covariance
+cov_symp_inf = pmg.calculate_cov(chi_dict,10e6)
+cov_symp = pmg.calculate_cov(chi_dict,delta)
 # See if we can find this too?
-Var, Var_inf = cir.get_cond_var(-cir.K1,cir.sigma**2*np.diag(np.cumsum(cir.theta[::-1])[::-1]),T-t)
-print(f'Cascading theor Cov {Var_inf}')
+_, Var_inf = cir.get_cond_var(-cir.K1,cir.sigma**2*np.diag(np.cumsum(cir.theta[::-1])[::-1]),10e6)
+# Conditional Var expression - much more difficult. Not done here
+# cov_an, _ = cir.get_cond_var(-cir.K1,cir.sigma**2*np.diag(E_sympy),delta)
+
+
+print(f'Cascading Sympy uncond Cov {cov_symp_inf}')
+print(f'Cascading theor undonc Cov {Var_inf}')
+
+print(f'Cascading sympu cond Cov {cov_symp}')
+# print(f'Cascading theor cond Cov {cov_an}')
 
 ##### LHC model moments
 
