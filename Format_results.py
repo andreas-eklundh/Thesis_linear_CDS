@@ -1,142 +1,267 @@
 import pandas as pd
+import os
 import numpy as np
-import re
 
-# ---------------------------------------------------------
-# CONFIGURATION
-# ---------------------------------------------------------
-excel_files = {
+# --- Configuration ---
+# Map the filenames to the column groups in the table (1, 2, 3)
+# Update the filenames if they change. 
+# We assume LHCC(3) file might be added later, so it's included in the map but marked optional.
+files_map = {
     1: "./Simulation_studies/lhc_parameter_comparison_Xdim1.xlsx",
     2: "./Simulation_studies/lhc_parameter_comparison_Xdim2.xlsx",
-    3: "./Simulation_studies/lhc_parameter_comparison_Xdim3.xlsx"
+    3: "./Simulation_studies/lhc_parameter_comparison_Xdim3.xlsx" # Placeholder name
 }
 
-# The parameters and ordering EXACTLY as in your LaTeX template
-ordered_params = [
-    "kappa1","kappa2","kappa3",
-    "theta1","theta2","theta3",
-    "gamma1",
-    "lambda1","lambda2","lambda3",
-    "sigma1","sigma2","sigma3",
-    "sigma_err"
-]
 
-# Map internal names → LaTeX math
-param_to_latex = {
-    "kappa1": r"$\kappa_1$",
-    "kappa2": r"$\kappa_2$",
-    "kappa3": r"$\kappa_3$",
-    "theta1": r"$\theta_1$",
-    "theta2": r"$\theta_2$",
-    "theta3": r"$\theta_3$",
-    "gamma1": r"$\gamma_1$",
-    "lambda1": r"$\lambda_1$",
-    "lambda2": r"$\lambda_2$",
-    "lambda3": r"$\lambda_3$",
-    "sigma1": r"$\sigma_1$",
-    "sigma2": r"$\sigma_2$",
-    "sigma3": r"$\sigma_3$",
-    "sigma_err": r"$\sigma_{err}$"
+files_map_cir = {
+    1: "./Simulation_studies/cir_parameter_comparison_Xdim1.xlsx",
+    2: "./Simulation_studies/cir_parameter_comparison_Xdim2.xlsx",
+    3: "./Simulation_studies/cir_parameter_comparison_Xdim3.xlsx" # Placeholder name
 }
 
-# ---------------------------------------------------------
-# FUNCTION TO CLEAN PARAMETER NAME
-# ---------------------------------------------------------
-def normalize(p):
-    p = p.lower().replace(" ", "")
-    p = p.replace("sigma_err","sigma_err")
-    p = p.replace("sigmaerror","sigma_err")
-    p = p.replace("lambda","lambda")
-    m = re.match(r"([a-zA-Z]+)(\d*)", p)
-    if m:
-        base, num = m.groups()
-        return base + num
-    return p
 
-# ---------------------------------------------------------
-# READ AND ALIGN FILES
-# ---------------------------------------------------------
-data = {}
 
-for model, file in excel_files.items():
-    df = pd.read_excel(file)
-    df.columns = df.columns.str.lower().str.strip()
+# Map LaTeX row labels to the 'Parameter' name found in the CSV files
+# Key: LaTeX Label, Value: CSV Parameter Name
+row_mapping = {
+    r"$\kappa_1$": "kappa1",
+    r"$\kappa_2$": "kappa2",
+    r"$\kappa_3$": "kappa3",
+    r"$\theta_1$": "theta1",
+    r"$\theta_2$": "theta2",
+    r"$\theta_3$": "theta3",
+    r"$\gamma_1$": "gamma1",
+    r"$\lambda_1$": "lambda1",
+    r"$\lambda_2$": "lambda2",
+    r"$\lambda_3$": "lambda3",
+    r"$\sigma_1$": "sigma1",
+    r"$\sigma_2$": "sigma2",
+    r"$\sigma_3$": "sigma3",
+    r"$\sigma_{err}$": "sigma_err" # Adjust based on exact string in CSV (e.g., "error", "sigmaerr")
+}
 
-    # standardize names
-    df["param"] = df[df.columns[0]].apply(lambda x: normalize(str(x)))
+# --- Helper Functions ---
 
-    keep = ["param"] + [c for c in df.columns if any(k in c for k in ["True",
-                                                                      "estimated kalman",
-                                                                      "se",
-                                                                      "filipovic"])]
-    df = df[keep]
+def load_data(files_map):
+    """Loads CSV files into a dictionary of DataFrames."""
+    dfs = {}
+    for key, filename in files_map.items():
+            # Read CSV
+            df = pd.read_excel(filename)
+            # Ensure 'Parameter' column is the index for easy lookup
+            if 'Parameter' in df.columns:
+                df.set_index('Parameter', inplace=True)
+            dfs[key] = df
+    return dfs
 
-    df.set_index("param", inplace=True)
+def format_val(val):
+    """Format val to 4 decimals, or scientific notation if very small."""
+    try:
+        if pd.isna(val) or val == "" or val == 0:
+            return "-"
+        
+        v = float(val)
 
-    data[model] = df
-
-# ---------------------------------------------------------
-# LATEX CELL BUILDER
-# ---------------------------------------------------------
-def latex_cell(true, est, se, filip):
-    # convert missing values to "-"
-    def fmt(x):
-        if pd.isna(x): return "-"
-        if isinstance(x,str): return x
-        return f"{x:.4g}"
-
-    true = fmt(true)
-    fil = fmt(filip)
-
-    # Kalman + SE stacked
-    if pd.isna(est):
-        kalman_cell = "-"
-    else:
-        est_str = fmt(est)
-        if pd.isna(se):
-            kalman_cell = est_str
-        else:
-            se_str = fmt(se)
-            kalman_cell = f"{est_str}\\\\ {{\\scriptsize ({se_str})}}"
-
-    return true, kalman_cell, fil
-
-# ---------------------------------------------------------
-# BUILD LATEX OUTPUT
-# ---------------------------------------------------------
-latex = []
-latex.append(r"\begin{table}[H]")
-latex.append(r"    \centering")
-latex.append(r"    \begin{tabular}{|c|ccc|ccc|ccc|}")
-latex.append(r"        \hline")
-latex.append(r"        Parameters & \multicolumn{3}{c|}{LHCC(1)} & \multicolumn{3}{c|}{LHCC(2)} & \multicolumn{3}{c|}{LHCC(3)} \\")
-latex.append(r"        \cline{2-10}")
-latex.append(r"         & True & Kalman & Filipovic & True & Kalman & Filipovic & True & Kalman & Filipovic \\")
-latex.append(r"        \hline")
-
-for p in ordered_params:
-    row = [param_to_latex[p]]
-    for m in [1,2,3]:
-        df = data[m]
-
-        t = df.at[p,"true"] if "true" in df.columns and p in df.index else np.nan
-        e = df.at[p,"est"] if "estimkalman" in df.columns and p in df.index else np.nan
-        s = df.at[p,"se"] if "se" in df.columns and p in df.index else np.nan
-        f = df.at[p,"filip"] if "filip" in df.columns and p in df.index else np.nan
-
-        t, k, f = latex_cell(t,e,s,f)
-        row += [t,k,f]
-
-    latex.append("         " + " & ".join(row) + r" \\")
+        # Use scientific notation if extremely small
+        if abs(v) < 1e-4:
+            return f"{v:.2e}"   # scientific format
+        
+        return f"{v:.3f}"
     
-latex.append(r"        \hline")
-latex.append(r"    \end{tabular}")
-latex.append(r"    \caption{Parameter Estimation in the LHCC Model. Standard Errors in Parenthesis}")
-latex.append(r"    \label{tab:lhc_simul}")
-latex.append(r"\end{table}")
+    except:
+        return "-"
 
-# Print result
-print("\n".join(latex))
+
+def get_row_data(param_name_csv, dfs, lhc=True):
+    """Extracts True, Kalman, Filipovic values for a specific parameter across all 3 file dimensions."""
+    row_cells = []
+    
+    for i in range(1, 4): # Loop through LHCC(1), LHCC(2), LHCC(3)
+        df = dfs.get(i)
+        
+        # If df exists and parameter is in the index
+        if df is not None and param_name_csv in df.index:
+            try:
+                # Extract values. Column names must match CSV headers exactly
+                val_true = format_val(df.loc[param_name_csv, 'True'])
+                val_kalman = format_val(df.loc[param_name_csv, 'Estimated Kalman'])
+                if lhc:
+                    val_filipovic = format_val(df.loc[param_name_csv, 'Filipovic'])
+                    val_filipovic = r"\makecell{" +val_filipovic + r"\\[-6pt] \small{}}"
+
+                se = format_val(df.loc[param_name_csv, 'SE'])
+                val_kalman = r"\makecell{" +val_kalman + r"\\[-6pt] \small{(" + se + ")}}"
+                val_true = r"\makecell{" +val_true + r"\\[-6pt] \small{}}"
+                if lhc:
+                    row_cells.extend([val_true, val_kalman, val_filipovic])
+                else:
+                    row_cells.extend([val_true, val_kalman])
+
+            except KeyError as e:
+                # Column not found or other error
+                if lhc:
+                    row_cells.extend(["-", "-", "-"])
+                else:
+                    row_cells.extend(["-", "-"])
+        else:
+            # If the file is missing or the specific parameter isn't in this dimension
+            # We output "-" if the file exists but param is missing, or empty if file is missing?
+            # Based on your table, empty entries (no hyphen) usually mean "not applicable" for that dimension.
+            # While "-" means "applicable but missing/zero".
+            # For now, if the DF is missing (Dim 3), we leave it blank. 
+            # If DF exists but param missing (e.g. kappa2 in Xdim1), we usually leave it blank or put "-".
+            # The prompt has empty slots for k2 in LHCC(1).
+            if lhc:
+                row_cells.extend(["-", "-", "-"])
+            else: 
+                row_cells.extend([ "-", "-"])
+ 
+    return row_cells
+
+def get_loglike_data(dfs,lhc=True):
+    """Extracts LogLikelihood (assumed to be constant per file)."""
+    row_cells = []
+    for i in range(1, 4):
+        df = dfs.get(i)
+        if df is not None and 'LogLike' in df.columns:
+            # Take the first value as it's usually model-wide
+            val = format_val(df['LogLike'].iloc[0])
+            if lhc:
+                row_cells.extend(["-", val,'-'])
+            else:
+                row_cells.extend(["-", val])
+
+
+        else:
+            if lhc:
+                row_cells.extend(["-", "-", "-"])
+            else: 
+                row_cells.extend([ "-", "-"])
+
+    return row_cells
+
+# --- Main Execution ---
+
+def generate_latex_lhc():
+    dfs = load_data(files_map)
+    
+    print(r"\begin{table}[H]")
+    print(r"    \centering")
+    print(r"    \begin{tabular}{|c|ccc|ccc|ccc|}")
+    print(r"        \hline")
+    print(r"         & \multicolumn{3}{c|}{\textbf{LHCC(1)}} & \multicolumn{3}{c|}{\textbf{LHCC(2)}} & \multicolumn{3}{c|}{\textbf{LHCC(3)}} \\")
+    print(r"        \cline{2-10}")
+    print(r"         & True & Kalman & Filipovic & True & Kalman & Filipovic & True & Kalman & Filipovic \\")
+    print(r"        \hline")
+
+    # Generate rows for parameters
+    for latex_label, csv_param in row_mapping.items():
+        cells = get_row_data(csv_param, dfs)
+        # Join cells with ' & '
+        line_content = " & ".join(cells)
+        print(f"        {latex_label} & {line_content} \\\\")
+
+    print(r"        \hline")
+    
+    # Generate Log Likelihood row
+    log_cells = get_loglike_data(dfs)
+    log_line = " & ".join(log_cells)
+    print(f"        $\\log \\mathcal{{L}}$ & {log_line}\\\\")
+    
+    print(r"        \hline")
+    print(r"    \end{tabular}")
+    print(r"    \caption{Parameter Estimation in the LHCC Model}")
+    print(r"    \label{tab:lhc_simul}")
+    print(r"\end{table}")
+
+
+#### Cascading logic.
+
+def generate_latex_afc():
+    dfs = load_data(files_map_cir)
+    
+    print(r"\begin{table}[H]")
+    print(r"    \centering")
+    print(r"        \begin{tabular}{|c|cc|cc|cc|}")
+    print(r"        \hline")
+    print(r"         & \multicolumn{2}{c|}{\textbf{AFC(1)}} & \multicolumn{2}{c|}{\textbf{AFC(2)}} & \multicolumn{2}{c|}{\textbf{AFC(3)}} \\")
+    print(r"        \cline{2-7}")
+    print(r"        $\Theta$ & True & Kalman & True & Kalman & True & Kalman \\")
+    print(r"        \hline")
+
+    # Generate rows for parameters
+    for latex_label, csv_param in row_mapping.items():
+        cells = get_row_data(csv_param, dfs,lhc=False)
+        # Join cells with ' & '
+        line_content = " & ".join(cells)
+        print(f"        {latex_label} & {line_content} \\\\")
+
+    print(r"        \hline")
+    
+    # Generate Log Likelihood row
+    log_cells = get_loglike_data(dfs,lhc=False)
+    log_line = " & ".join(log_cells)
+    print(f"        $\\log \\mathcal{{L}}$ & {log_line}\\\\")
+    
+    print(r"        \hline")
+    print(r"    \end{tabular}")
+    print(r"    \caption{Parameter Estimation in the AFC Model}")
+    print(r"    \label{tab:cir_simul}")
+    print(r"\end{table}")
+
+
+
+if __name__ == "__main__":
+    ### The LHCC model
+    generate_latex_lhc()
+
+
+    ### The Cascading affine model-
+    generate_latex_afc()
+
+
+
+#### New section for handling the npz files and convert these into output tables. 
+# Logic for handling the tables. 
+
+
+
+# Loop over firms when in prod.
+firms = ['CZMB','DANBNK', 'MONTE', 'SVSKHB']
+
+
+for firm in firms:
+    # Stack multicol wise.
+    for m in range(1,4):
+        ### Read in data. 
+
+        # LHCC Filipovic data
+
+        directory = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}"
+
+        filepath = os.path.join(directory, f"Kalman_resultsLHC_NX{m}.npz")
+        data = np.load(filepath)
+        filipovic = data["final_param"]
+
+        # LHCC Kalman
+
+        filepath = os.path.join(directory, f"Filipovic_LHC_NX{m}.npz")
+        data = np.load(filepath)
+        LHCCKalman =data["final_param"]
+        se_lhcc = data['SE']
+        ll_lhcc = data['LL']
+        # AFC Kalman.
+
+        filepath = os.path.join(directory, f"Kalman_resultsCIR_Xdim{m}.npz")
+        data = np.load(filepath)
+        AFC = data['final_param']
+        se_acf = data['SE']
+        ll_acf = data['log_likeli']
+        # Then fill multicols iteratively.
+
+
+
+
 
 
 test = 1
