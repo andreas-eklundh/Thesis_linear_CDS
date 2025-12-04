@@ -1419,7 +1419,7 @@ class LHC_single():
         #     }
         # )
         bounds = (
-                [(self.stationary_lambda, 1)] * self.m +     # kappa
+                [(self.stationary_lambda, 2)] * self.m +     # kappa
                 [(1e-6, 1)] * self.m      # theta
                 # [(1.e-6,1)]         # gamma1
                 )
@@ -1594,7 +1594,7 @@ class LHC_single():
     ## New: assume long term credit spread 5 bps. Then find gamma1.
     def calc_gamma1(self,kappa, theta, lambda_i=None):
         # Get stationary lambda1. 
-        stationary_spread = 5 / 10000
+        # stationary_spread = 5 / 10000
         # lambda_bar1 = stationary_spread #/ (1-self.delta)
         # m = len(kappa)
         # if lambda_i is None:
@@ -1605,7 +1605,9 @@ class LHC_single():
         # gamma1 = lambda_bar1 / (((-1)**m) * prod)
 
         # # Solve only for admissible range
-        gamma1 = theta[0] / 2
+        # gamma1 = theta[0] / 2
+        # set upper bound to highest implied default intensity times to (MONTE*2)
+        gamma1 = 2*0.16947616891318898
         return np.array([gamma1])
 
 
@@ -1625,7 +1627,7 @@ class LHC_single():
             )
         else:
             bounds = (
-                [(self.stationary_lambda, 1)] * m +     # kappa. Set to 1
+                [(self.stationary_lambda, 2)] * m +     # kappa. Set to 1
                 [(1e-6, 1)] * m +     # eta=theta*gamma1. Same bounds.
                 # [(0.0001,1)] +        # gamma1
                 [(-1, 1)] *(m)  +     # lambda_p
@@ -1659,11 +1661,11 @@ class LHC_single():
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
 
             strategy='best1bin',
-            popsize=20, #6, # 20 in prod,
-            mutation=(0.7, 1.0),
-            recombination=0.9,
-            maxiter=500, #100, # 500 in prod
-            tol=1e-5,
+            popsize=15, #5, #20,         # larger popsize -> more exploration
+            maxiter=300, # 600, # 800,       # allow many generations
+            mutation=(0.8, 1.0),
+            recombination=0.8,
+            tol=1e-4,# 1e-6,            # looser tolerance
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1736,10 +1738,11 @@ class LHC_single():
         # Get SE
         kalman_args = (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0)
         se = self.kalman_SE(params_opt=optim_params,f_args=kalman_args,eps = 1e-9)
-        ll = self.kalman_obj
+        # Get induced likelihood.
+        ll = np.sum(neg_log_lik)
         
         out_params = np.append(params_q,params_p)
-        return out_params, Xn, Zn, Pn, se, -ll
+        return out_params, Xn, Zn, Pn, se, ll
 
     def run_n_kalmans(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20):
         # Define grid of values.
@@ -1778,7 +1781,7 @@ class LHC_single():
 
 
     ### Standar error calculation. Run outside as comp needed for each
-    def kalman_SE(self,params_opt,f_args, eps=1e-9):
+    def kalman_SE(self,params_opt,f_args, eps=1e-6):
         (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0) =  f_args
         ll_0,_ ,_,_ = kalmanfilter_opt(params_opt,t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0)
         n = len(ll_0)
@@ -1795,9 +1798,9 @@ class LHC_single():
 
         # Then loop over dates to compute SE
         for date in  range(n):
-            se += np.outer(g[date,:], g[date,:])/ n
+            se += np.outer(g[date,:], g[date,:])
         # SE matrix is inverted cov estimate. Asymptotics
-        se = np.linalg.pinv(se) / n
+        se = np.linalg.pinv(se) 
         se_vec = np.sqrt(np.diag(se))
         return se_vec
 
