@@ -8,7 +8,7 @@ import matplotlib.dates as mdates
 
 if __name__ == "__main__":
     # parameters
-    r = 0.0252
+    r = 0.00248
     delta = 0.4
     tenor = 0.25
 

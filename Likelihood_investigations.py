@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 if __name__ == '__main__':
     # X_dim =1
     # T,M = 10, 100
-    # cir = CIR(0.0252,0.4,0.25,X_dim,cascading=True)
+    # cir = CIR(0.00248,0.4,0.25,X_dim,cascading=True)
     # # Here, parameters are set already
     # seed = 2000
 
@@ -247,10 +247,10 @@ if __name__ == '__main__':
     # ============= INITIALIZE LHC ============= #
     # ### Simulate 1 LHC dataset with specific parameter Choises.
     for X_dim in [1,2,3]:
-        lhc = LHC_single(0.0252,0.4,0.25)
+        lhc = LHC_single(0.00248,0.4,0.25)
         Y_dim,m = 1,X_dim
         # Here, parameters are set already
-        rng = np.random.default_rng(25524)
+        rng = np.random.default_rng(16489)
         X0 = 0.4
         lhc.initialise_LHC(Y_dim,m,X0=X0,rng=rng)
         params = lhc.flatten_params()
@@ -263,7 +263,7 @@ if __name__ == '__main__':
         chi0 = lhc.compute_stationary(lhc.kappa,lhc.theta,lhc.m,lhc.gamma1,mu1,lhc.lambda_i) # np.array([1] + [X0]*m)
         chi0 = np.append([1],chi0)
 
-        T,M = 10, 400
+        T,M = 10, 1000
         mat_grid = np.array([1,3,5,7,10]) # Typical maturity grid
 
         n_mat = mat_grid.shape[0]
@@ -289,17 +289,22 @@ if __name__ == '__main__':
 
 
         ### Run one kalman filter to see identification...
-        lhc_kalman_params,  Xn,Zn, Pn, se,ll= lhc.run_n_kalmans(T_path, t_mat_grid, CDS_simul_actual.T,base_seed=2000,n_restarts=1)
-        lhc_kalman_params =np.concatenate([lhc_kalman_params[:2*m], lhc.gamma1, lhc_kalman_params[2*m:]])
+        # lhc_kalman_params,  Xn,Zn, Pn, se,ll= lhc.run_n_kalmans(T_path, t_mat_grid, CDS_simul_actual.T,base_seed=2000,n_restarts=1)
+        # Read in the fitted kalman filter instead
+        files_loc = f"./Simulation_studies/lhc_parameter_comparison_Xdim{X_dim}.xlsx"
+        df = pd.read_excel(files_loc)
+        lhc_kalman_params = np.array(df['Estimated Kalman'])
+
+        # lhc_kalman_params =np.concatenate([lhc_kalman_params[:2*m], lhc.gamma1, lhc_kalman_params[2*m:]])
         # same for se - Not directly clear.
-        se =np.concatenate([se[:2*m],np.array([0]), se[2*m:]])
+        # se =np.concatenate([se[:2*m],np.array([0]), se[2*m:]])
         # print(lhc_kalman_params)
         # =================== PARAM SETUP =================== #
 
         true_params = {
             "kappa": np.array(params_actual[0]).flatten(),      # length m
             "theta": np.array(params_actual[1]).flatten(),
-            "gamma1": np.array(params_actual[2]).flatten(),     # stays length 1
+            # "gamma1": np.array(params_actual[2]).flatten(),     # stays length 1
             "lambda_i": np.array(params_actual[3]).flatten(),
             "sigma": np.array(params_actual[4]).flatten(),
             "sigma_err": np.array(params_actual[5]).flatten()   # stays scalar or len1
@@ -308,7 +313,7 @@ if __name__ == '__main__':
         kalman_params = {
             "kappa": np.array(lhc_kalman_params[0:m]),
             "theta": np.array(lhc_kalman_params[m:2*m]),
-            "gamma1": np.array([lhc_kalman_params[2*m]]),
+            # "gamma1": np.array([lhc_kalman_params[2*m]]),
             "lambda_i": np.array(lhc_kalman_params[2*m+1:3*m+1]),
             "sigma": np.array(lhc_kalman_params[3*m+1:4*m+1]),
             "sigma_err": np.array([lhc_kalman_params[-1]])
@@ -316,12 +321,12 @@ if __name__ == '__main__':
 
         # Spread (relative or absolute)
         grid_spread = {
-            "kappa": 0.05,
-            "theta": 0.05,
-            "gamma1": 0.05,
-            "lambda_i": 0.1,
-            "sigma": 0.05,
-            "sigma_err": 0.05
+            "kappa": 0.15,
+            "theta": 0.15,
+            # "gamma1": 0.05,
+            "lambda_i": 0.2,
+            "sigma": 0.15,
+            "sigma_err": 0.15
         }
 
         n_points = 15
@@ -376,13 +381,17 @@ if __name__ == '__main__':
                 #     upper = v * (1 + spread)
                 #     g = np.linspace(lower, upper, n_points)
 
-                lower = v * (1 - spread)
-                upper = v * (1 + spread)
+                if key == 'lambda_i':
+                    lower = v - spread
+                    upper = v + spread
+                else:
+                    lower = v * (1 - spread)
+                    upper = v * (1 + spread)
                 dim = max(lower.shape[0],upper.shape[0])
                 g = np.zeros((n_points,dim))
                 for i in range(dim):
                     g[:,i] = np.linspace(lower[i], upper[i], n_points)
-
+                
                 g = np.linspace(lower, upper, n_points)
 
                 
@@ -428,21 +437,29 @@ if __name__ == '__main__':
                         # unpack
                         kappa     = np.array(pvals["kappa"]).flatten()
                         theta     = np.array(pvals["theta"]).flatten()
-                        gamma1    = np.array(pvals["gamma1"]).flatten()
+                        # gamma1    = np.array(pvals["gamma1"]).flatten()
                         lambda_i  = np.array(pvals["lambda_i"]).flatten()
                         sigma     = np.array(pvals["sigma"]).flatten()
                         sigma_err = np.array(pvals["sigma_err"]).flatten()
 
-                        params_vec = np.concatenate([kappa, theta, gamma1, lambda_i, sigma, sigma_err])
+                        # params_vec = np.concatenate([kappa, theta, gamma1, lambda_i, sigma, sigma_err])
+                        params_vec = np.concatenate([kappa, theta, lambda_i, sigma, sigma_err])
 
                         # constraint check
                         constr = nonlinear_constraints(params_vec, m)
                         if np.any(constr < 0):
                             neg_log_like = np.nan
                         else:
+                            # t_obs[::5],  T_M_grid[:,::5], CDS_obs[::5,:]
+                            # neg_log_like = kalman_wrapper(
+                            #     params_vec, T_path, T_path, t_mat_grid,
+                            #     CDS_simul_actual.T,
+                            #     X0=lhc.X0, m=lhc.m, r=lhc.r,
+                            #     Y_dim=lhc.Y_dim, delta=lhc.delta, tenor=lhc.tenor
+                            # )
                             neg_log_like = kalman_wrapper(
-                                params_vec, T_path, T_path, t_mat_grid,
-                                CDS_simul_actual.T,
+                                params_vec, T_path[::5], T_path[::5], t_mat_grid[:,::5],
+                                CDS_simul_actual.T[::5,:],
                                 X0=lhc.X0, m=lhc.m, r=lhc.r,
                                 Y_dim=lhc.Y_dim, delta=lhc.delta, tenor=lhc.tenor
                             )

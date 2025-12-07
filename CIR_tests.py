@@ -10,7 +10,7 @@ from numba.experimental import jitclass
 from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity
 
 if __name__ == '__main__':
-    r = 0.0252
+    r = 0.00248
     delta = 0.4
     tenor = 0.25
     X_dim = 2

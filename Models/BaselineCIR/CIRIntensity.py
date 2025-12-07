@@ -483,7 +483,7 @@ class CIRIntensity():
         return final_param, Xn,Zn, Pn
         
 def __main__():
-    cir = CIRIntensity(0.0252, 0.4, 0.25)
+    cir = CIRIntensity(0.00248, 0.4, 0.25)
     x0 = np.array([0])
     #alpha_num, beta_num = cir.solve_ricatti(beta_0=x0,alpha_0=0,T=1)
     # alpha_lando,beta_lando = cir.cir_solution(x=0,T=1)

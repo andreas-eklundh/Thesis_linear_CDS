@@ -207,20 +207,76 @@ def psi_prem(lhc, t, t0, t_M):
     accrual_prev = t_grid[-2] * psi_D(lhc, t, t_M) - sum_D - t0 * psi_D(lhc, t, t0)
     return (coupon_leg+accrual_default - accrual_prev).flatten()
 
+@njit 
+def psi_prem_fast(lhc,t,t0,t_M_list,coupon_leg_mat):
+    accrual_default = np.zeros_like(coupon_leg_mat)
+    accrual_prev = np.zeros_like(coupon_leg_mat)
+    for i,t_m in enumerate(t_M_list):
+        accrual_default[i,:] = (psi_D_star(lhc, t, t_m) - psi_D_star(lhc, t, t0)).flatten()
+        # hardcoded tenor
+        accrual_prev[i,:] = (t_m - 0.25) * psi_D(lhc, t, t_m) - t0 * psi_D(lhc, t, t0)
+
+    return coupon_leg_mat+accrual_default-accrual_prev
+
+@njit
+def psi_prem_pre(lhc, t, t0, t_M):
+    '''
+    Compute all but accrual part.
+    '''
+    (a, c, gamma, b, beta,
+                    A, A_star, A_star_inv,
+                    id_mat, r, m, Y_dim,
+                    delta, tenor) = lhc
+    sum_Z = np.zeros(Y_dim + m)
+    sum_D = np.zeros(Y_dim + m)
+    t_grid = np.arange(t0, t_M + 1e-12, tenor)
+    dt = t_grid[1] - t_grid[0]
+    for j in range(1, len(t_grid)):
+        sum_Z += dt * psi_Z(lhc, t, t_grid[j])
+        if j < len(t_grid) - 1:
+            sum_D += dt * psi_D(lhc, t, t_grid[j])
+    coupon_leg = sum_Z
+    # accrual_default =  psi_D_star(lhc, t, t_M) - psi_D_star(lhc, t, t0)
+    return (coupon_leg + sum_D).flatten()
+
+
 @njit
 def psi_cds(lhc, t, t0, t_M, k):
     return psi_prot(lhc, t, t0, t_M) - k * psi_prem(lhc, t, t0, t_M)
 
 @njit
-def get_CDS_Model(t_obs, t0, t_mat_grid, state_vec, lhc):
+def get_CDS_Model(t_obs, t0, t_mat_grid, state_vec, lhc,calc_efficiently=False):
     n_mat, n_obs = t_mat_grid.shape
     CDS = np.ones((n_mat, n_obs))
-    for mat_idx in range(n_mat):
-        for i in range(n_obs):
-            prot = psi_prot(lhc, t_obs[i], t0[i], t_mat_grid[mat_idx, i])
-            prem = psi_prem(lhc, t_obs[i], t0[i], t_mat_grid[mat_idx, i])
+
+    # If in calibration setup calibrate fast by precomputing.
+    if calc_efficiently:
+        # Compute Psi's for mats. Only prot is a Protection leg is time homogene.
+        psi_prot_mat = np.zeros((n_mat, state_vec.shape[0]))
+        psi_prem_mat = np.zeros((n_mat, state_vec.shape[0]))
+        psi_prem_pre_mat = np.zeros((n_mat, state_vec.shape[0]))
+    
+        for i in range(n_mat):
+            # Pass a scalar from the array X
+            psi_prot_mat[i,:] = psi_prot(lhc,t_obs[0],t0[0],t_mat_grid[i,0])
+            psi_prem_pre_mat[i,:] = psi_prem_pre(lhc,t_obs[0],t0[0],t_mat_grid[i,0])
+
+        psi_prot_mat = np.ascontiguousarray(psi_prot_mat)
+        # Find Z,X,Y
+        for time_idx in range(0, n_obs):
+            # Compute psi's
+            psi_prem_mat = psi_prem_fast(lhc,t_obs[time_idx],t_obs[time_idx],
+                                        t_mat_grid[:,time_idx].flatten(),psi_prem_pre_mat)
+            psi_prem_mat = np.ascontiguousarray(psi_prem_mat)
             st = np.ascontiguousarray(state_vec[:, i])
-            CDS[mat_idx, i] = np.dot(prot, st) / np.dot(prem, st)
+            CDS[:, i] = psi_prot_mat @ st / psi_prem_mat @ st
+    else:
+        for mat_idx in range(n_mat):
+            for i in range(n_obs):
+                prot = psi_prot(lhc, t_obs[i], t0[i], t_mat_grid[mat_idx, i])
+                prem = psi_prem(lhc, t_obs[i], t0[i], t_mat_grid[mat_idx, i])
+                st = np.ascontiguousarray(state_vec[:, i])
+                CDS[mat_idx, i] = np.dot(prot, st) / np.dot(prem, st)
     return CDS
 
 @njit
@@ -437,7 +493,6 @@ def drift_deriv_term(Xn, lhc_p, Delta):
 
 
 
-### NOTE: THIS METHODOLODY WILL NOT WORK, STILL NOT OPTIMIZING AT EACH STEP (SO USE PREVIOUS VAL)
 @njit
 def get_states(lhc, t_obs, T_M_grid, CDS_obs,kappa, theta, gamma1):
     (a, c, gamma, b, beta,
@@ -463,12 +518,33 @@ def get_states(lhc, t_obs, T_M_grid, CDS_obs,kappa, theta, gamma1):
     X_prev = np.ascontiguousarray(X[:,0])
     Z_prev = np.ascontiguousarray(X[:,0] / Y[0])
 
+    # Precompute all possible of the psifunctions. expecially prem leg has low hanging fruits.
+
+    # Compute Psi's for mats. Only prot is a Protection leg is time homogene.
+    psi_prot_mat = np.zeros((n_mat, m+1))
+    psi_prem_mat = np.zeros((n_mat, m+1))
+    psi_prem_pre_mat = np.zeros((n_mat, m+1))
+ 
+    for i in range(n_mat):
+        # Pass a scalar from the array X
+        psi_prot_mat[i,:] = psi_prot(lhc,t_obs[0],t_obs[0],T_M_grid[i,0])
+        psi_prem_pre_mat[i,:] = psi_prem_pre(lhc,t_obs[0],t_obs[0],T_M_grid[i,0])
+
+    psi_prot_mat = np.ascontiguousarray(psi_prot_mat)
+
 
     ti = t_obs[1]
     ti_prev = t_obs[0]
     dt = ti-ti_prev
     # Find Z,X,Y
     for time_idx in range(0, n_obs):
+        # Compute psi's
+        psi_prem_mat = psi_prem_fast(lhc,t_obs[time_idx],t_obs[time_idx],
+                                     T_M_grid[:,time_idx].flatten(),psi_prem_pre_mat)
+        psi_prem_mat = np.ascontiguousarray(psi_prem_mat)
+        psi_c = psi_prot_mat -  psi_prem_mat * CDS_obs[time_idx,None].T
+
+        # Actual optimization
         A_big = np.empty(shape = (n_mat,m))
         y_big = np.empty(shape = (n_mat))
         # Weight matrix
@@ -479,14 +555,12 @@ def get_states(lhc, t_obs, T_M_grid, CDS_obs,kappa, theta, gamma1):
         one_Z[0] = 1.0
         one_Z[1:] = Z_prev.flatten()
 
-        for mat_idx in range(n_mat):
-            psi_c = psi_cds(lhc,ti, ti, T_M_grid[mat_idx,time_idx], CDS_obs[time_idx,mat_idx])
-            psi_p = psi_prem(lhc,ti, ti, T_M_grid[mat_idx,time_idx])
-            d_k = np.dot(psi_p, one_Z)
-            A_big[mat_idx,:] = - psi_c[1:]
-            y_big[mat_idx] =  psi_c[0]      # Note, y needs to be negative to formulate as WLS problem
-            W[mat_idx,mat_idx] = 1 / d_k**2      # Needs to be squared to match reg .
-
+        d_k = psi_prem_mat @ one_Z
+        A_big = - psi_c[:,1:]
+        y_big =  psi_c[:,0]      # Note, y needs to be negative to formulate as WLS problem
+        W = np.diag(1 / d_k**2 )     # Needs to be squared to match reg .
+        A_big = np.ascontiguousarray(A_big)
+        y_big =  np.ascontiguousarray(y_big)
         # Maybe not correct formulat (generalized inverse)
         if (m == 1) & (n_mat == 1):
             Z[:,time_idx] =  np.clip(y_big / A_big,0.0,1.0)
@@ -789,7 +863,7 @@ def calc_gamma1(kappa, theta, lambda_i=None):
     # gamma1 = lambda_bar1 / (((-1)**m) * prod)
 
     # Solve only for admissible range
-    gamma1 = theta[0] / 2
+    gamma1 = kappa[0] / 2
     return np.array([gamma1])
 
 
@@ -857,17 +931,22 @@ def kalmanfilter_opt(params, t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,X0):
     # Compute Psi's for mats. Only prot is a Protection leg is time homogene.
     psi_prot_mat = np.zeros((n_mat, m+1))
     psi_prem_mat = np.zeros((n_mat, m+1))
+    psi_prem_pre_mat = np.zeros((n_mat, m+1))
+ 
     for i in range(n_mat):
         # Pass a scalar from the array X
         psi_prot_mat[i,:] = psi_prot(lhc_q,t_obs[0],t0[0],T_M_grid[i,0])
+        psi_prem_pre_mat[i,:] = psi_prem_pre(lhc_q,t_obs[0],t0[0],T_M_grid[i,0])
+
     psi_prot_mat = np.ascontiguousarray(psi_prot_mat)
     # Verify no change...
 
     # Run algo.
     for n in range(0,n_obs):
-        for i in range(n_mat):
-        # Pass a scalar from the array X
-            psi_prem_mat[i,:] = psi_prem(lhc_q,t_obs[n],t0[n],T_M_grid[i,n])
+        # for i in range(n_mat):
+        # # # Pass a scalar from the array X
+        #     psi_prem_mat[i,:] = psi_prem(lhc_q,t_obs[n],t0[n],T_M_grid[i,n])
+        psi_prem_mat = psi_prem_fast(lhc_q,t_obs[n],t0[n],T_M_grid[:,n].flatten(),psi_prem_pre_mat)
         psi_prem_mat = np.ascontiguousarray(psi_prem_mat)
         # Extended filter optimized.
         vn,S_k, Xn[n,:], Pn[n,:,:],S_k_inv = update_step_cds(pred_Xn,pred_Pn,cds_fun_mats,cds_deriv_mats,R_k,
@@ -987,7 +1066,7 @@ def nonlinear_constraints( params, m):
     # theta_p = theta_p + lambda_i / kappa_p
 
     # ensure arrays
-    sigma = np.asarray(sigma, dtype=float)
+    sigma = np.asarray(sigma)
 
     # Constraints on lambda. 'Mean reversion needs to be positive'.
     # g1 =  lambda_i[-1] + kappa[-1]*theta[-1]
@@ -1054,6 +1133,18 @@ def nonlinear_constraints( params, m):
     #         g6 = kappa[i] - kappa[i+1] + 1e-4
     #     cons.append(np.asarray(g6).flatten())
 
+    stationary_lambda = 0.05 / 100
+    X_dim = kappa.shape[0]
+    if X_dim > 1:
+        mu = compute_stationary(kappa, theta, 
+                                            X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
+        upper_lim_theta_1 =np.minimum(1/2 * mu[1]**(-1),1/2) # always second entrance
+    else: 
+        upper_lim_theta_1 = 1 / 2
+    g5 = upper_lim_theta_1 - theta[0]
+    cons.append(np.asarray(g5).flatten())
+
+
     cons = np.concatenate(cons, dtype=float)
 
     return cons
@@ -1119,21 +1210,42 @@ class LHC_single():
         # Assumption to ensure proper initilialization.
         # Draw kappa1,theta1
         self.kappa = np.zeros(X_dim)
+        # Kappa can be chosen freely elbeit subject to the 5bps constr. 
         self.kappa[0] = rng.uniform(self.stationary_lambda,1, size=(1,))       # Kappa given
+        # Theta can be chosen freely for all but i=1.
         self.theta = np.zeros_like(self.kappa)
-        self.theta[0] = rng.uniform(0.01, 1 / (1 + self.kappa[0]/2) , size=(1,))
-        # Draw remaining thetas:
-        self.kappa[1:] = rng.uniform(self.theta[0]/2,1, size=(X_dim-1,))
-        # Finally draw theta
+        # Draw gamma1 - depends only on kappa_1 (kept theta placeholeder)
+        self.gamma1 = self.calc_gamma1(self.kappa,self.theta)
+        # Draw remaining kappas, must be above gamma1 for space to theta.
+        self.kappa[1:] = rng.uniform(self.gamma1,1, size=(X_dim-1,)) 
+        
+        # Thetas must adhere to constraint.
+        self.theta[1:] = rng.uniform(0, 1- self.gamma1 / self.kappa[1:] , size=(X_dim - 1,))
+
+        # We can then draw theta1. This should be added as constraint.
+        stationary_lambda = 0.05 / 100
         if X_dim > 1:
-            self.theta[1:] = rng.uniform(0.0001, 1 - self.theta[0] / (2*self.kappa[1:]) , size=(X_dim-1,))
+            mu = self.compute_stationary(self.kappa, self.theta, 
+                                                X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
+            # Take minimum as the fraction with mu can explode. f
+            upper_lim_theta_1 =np.minimum(1/2 * mu[1]**(-1),1/2) # always second entrance
+        else: 
+            upper_lim_theta_1 = 1 / 2
+        # Finally, draw theta.
+        self.theta[0] = rng.uniform(0, upper_lim_theta_1 , size=(1,))
+        # Then 
+        # Draw remaining thetas:
+        # self.kappa[1:] = rng.uniform(self.theta[0]/2,1, size=(X_dim-1,))
+        # # Finally draw theta
+        # if X_dim > 1:
+        #     self.theta[1:] = rng.uniform(0.0001, 1 - self.theta[0] / (2*self.kappa[1:]) , size=(X_dim-1,))
 
         # self.theta = np.sort(self.theta)[::-1] # Sort descending
 
         # self.theta = lambda_bar1 / self.kappa
 
         # gamma1 calculated under Q.
-        self.gamma1 = self.calc_gamma1(self.kappa,self.theta,lambda_i=None)
+        # self.gamma1 = self.calc_gamma1(self.kappa,self.theta,lambda_i=None)
         # self.gamma1 = rng.uniform(0.00, np.min((1-self.theta)*self.kappa) , size=(Y_dim,))
         # self.theta = np.sort(self.theta)
         # self.gamma1 = np.array([self.theta[0] / 4]) # rng.uniform(0, self.kappa, size=(Y_dim,))    # gamma1 strictly pos.
@@ -1260,7 +1372,8 @@ class LHC_single():
         return self.psi_prot(t, t0, t_M) - k * self.psi_prem(t, t0, t_M)
 
 
-    def CDS_model(self,t_obs, T_M_grid, CDS_obs, t0=None, X_in=None,Y_in=None,Z_in=None):
+    def CDS_model(self,t_obs, T_M_grid, CDS_obs, t0=None, X_in=None,Y_in=None,Z_in=None,
+                  calc_efficiently=False):
         # Get latent states.
         # If t0 is none, assume initial date is today
         if t0 is None:
@@ -1299,7 +1412,7 @@ class LHC_single():
         state_vec = np.vstack([Y, X])
 
         # Here formula is the t_obs according to formula
-        CDS = get_CDS_Model(t_obs, t_obs, T_M_grid, state_vec, lhc )
+        CDS = get_CDS_Model(t_obs, t_obs, T_M_grid, state_vec, lhc,calc_efficiently )
         #print('Done Getting CDS Rate')
         return CDS.T  # NOTE: CHANGED SIGN HERE. No idea why necessary.
 
@@ -1347,7 +1460,7 @@ class LHC_single():
 
 
     ########### THIS METHODOLODY REBUILDS THE ONE IN ACKERER/FILIPOVIC. #################3
-    def objective(self, params, t_obs, T_M_grid, CDS_obs):
+    def objective(self, params, t_obs, T_M_grid, CDS_obs,calc_efficiently=False):
         # Test for feasibility.
         print(params)
         # --------- HARD CONSTRAINT CHECKS ---------
@@ -1375,8 +1488,8 @@ class LHC_single():
 
 
         #  Build Psi functions to avoid redoing it later.
-        model_cds = self.CDS_model(t_obs, T_M_grid, CDS_obs)
-        obj = np.sqrt(np.mean((model_cds - CDS_obs)**2))
+        model_cds = self.CDS_model(t_obs, T_M_grid, CDS_obs,calc_efficiently)
+        obj = np.sqrt(0.5 * np.mean((model_cds - CDS_obs)**2))
 
         return obj
 
@@ -1392,9 +1505,21 @@ class LHC_single():
 
         for i in range(self.m):
             g3 = -(gamma1 - kappa[i] + kappa[i] * theta[i])
-            cons.append(g3)
+            cons.append(np.asarray(g3).flatten())
 
-        return cons
+        # Add  constraint on theta 1
+        stationary_lambda = 0.05 / 100
+        X_dim = kappa.shape[0]
+        if X_dim > 1:
+            mu = compute_stationary(kappa, theta, 
+                                                X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
+            upper_lim_theta_1 = np.minimum(1/(2 * mu[1]),1/2) # always second entrance
+        else: 
+            upper_lim_theta_1 = 1 / 2
+        g5 = upper_lim_theta_1 - theta[0]
+        cons.append(np.asarray(g5).flatten())
+
+        return  np.array(cons).flatten()
 
 
 
@@ -1404,7 +1529,8 @@ class LHC_single():
         # drop gamma1
         flat_init = flat_init[:-1]
         CDS_obs = np.ascontiguousarray(CDS_obs)
-
+        # Set optimizer flag to calculate cds spread  efficiently.
+        calc_efficient = True
         # result = minimize(
         #     fun = self.objective,
         #     x0 = flat_init,
@@ -1420,7 +1546,8 @@ class LHC_single():
         # )
         bounds = (
                 [(self.stationary_lambda, 2)] * self.m +     # kappa
-                [(1e-6, 1)] * self.m      # theta
+                [(1e-6,1/2)] +
+                [(1e-6, 1)] * (self.m-1)      # theta
                 # [(1.e-6,1)]         # gamma1
                 )
         constraints = NonlinearConstraint(lambda x: self.build_constraints(x), 0, np.inf)
@@ -1428,17 +1555,17 @@ class LHC_single():
         # Dont add too much here. Quite quick at finding desired.
         result = differential_evolution(
             func= self.objective,
-            x0=flat_init, # Maybe initial value is wrong here?
+            # x0=flat_init, # Maybe initial value is wrong here?
             bounds=bounds,
             constraints=(constraints,),
-            args = (t_obs[::5],  T_M_grid[:,::5], CDS_obs[::5,:]),
-            # args = (t_obs, T_M_grid, CDS_obs),
+            # args = (t_obs[::5],  T_M_grid[:,::5], CDS_obs[::5,:]),
+            args = (t_obs, T_M_grid, CDS_obs,calc_efficient),
             strategy='best1bin',
-            popsize=20, #6, # 20 in prod,
-            mutation=(0.7, 1.0),
-            recombination=0.9,
-            maxiter=500, #100, # 500 in prod
-            tol=1e-5,
+            popsize=10, #6, # 20 in prod,
+            mutation=(0.8, 1.0),
+            recombination=0.8,
+            maxiter=200, #100, # 500 in prod
+            tol=1e-3,
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1447,6 +1574,19 @@ class LHC_single():
             seed= np.random.RandomState(base_seed) #  Use rng for reproducability.
         )
 
+
+        # polish_result = minimize(
+        #     fun= self.objective,
+        #     x0=result.x,  
+        #     args = (t_obs, T_M_grid, CDS_obs,calc_efficient),
+        #     method='trust-constr',
+        #     bounds = bounds,
+        #     constraints=(constraints),
+        #     options={
+        #         'disp': True,
+        #         'maxiter': 300  # Give it a reasonable number of iterations
+        #     }
+        # )
 
         if result.success:
             print(f"Optimization succeeded, params:{result.x}, objective: {result.fun}")
@@ -1605,9 +1745,9 @@ class LHC_single():
         # gamma1 = lambda_bar1 / (((-1)**m) * prod)
 
         # # Solve only for admissible range
-        # gamma1 = theta[0] / 2
+        gamma1 = kappa[0] / 2
         # set upper bound to highest implied default intensity times to (MONTE*2)
-        gamma1 = 2*0.16947616891318898
+        # gamma1 = 2*0.16947616891318898
         return np.array([gamma1])
 
 
@@ -1619,20 +1759,21 @@ class LHC_single():
         if self.m == 1:
             bounds = (
                 [(self.stationary_lambda, 2)] * m +     # kappa
-                [(1e-6,1)] * m +     # eta=theta*gamma1. Same bounds.
+                [(1e-6,1/2)] * m +     # eta=theta*gamma1. Same bounds. Restriction justified here
                 # [(0.0001,1)] +        # gamma1
-                [(-1, 1)] * m  +         # lambda_p
-                [(1e-6, 1)] * m +     # sigma
-                [(1e-6, 0.0005)]         # sigma_err. Unrealistic measure noise is more than 5 Bps
+                [(-2, 2)] * m  +         # lambda_p
+                [(1e-6, 1.5)] * m +     # sigma
+                [(1e-6, 0.001)]         # sigma_err. Unrealistic measure noise is more than 50 Bps
             )
         else:
             bounds = (
                 [(self.stationary_lambda, 2)] * m +     # kappa. Set to 1
-                [(1e-6, 1)] * m +     # eta=theta*gamma1. Same bounds.
+                [(1e-6, 1/2)]  +     # eta=theta*gamma1. Same bounds.
+                [(1e-6, 1)] * (m-1) +     # eta=theta*gamma1. Same bounds.
                 # [(0.0001,1)] +        # gamma1
-                [(-1, 1)] *(m)  +     # lambda_p
-                [(1e-6, 1)] * m +     # sigma
-                [(1e-5, 0.005)]         # sigma_err - very small
+                [(-2, 2)] *(m)  +     # lambda_p
+                [(1e-6, 1.5)] * m +     # sigma
+                [(1e-5, 0.001)]         # sigma_err - very small
             )
         nlc = NonlinearConstraint(lambda x: nonlinear_constraints(x,self.m), 0, np.inf)
         # theta_index = m   # Index of theta[0]
@@ -1655,17 +1796,17 @@ class LHC_single():
             # constraints=(nlc,eq),
             constraints=(nlc),
 
-            # args=(t_obs, t0, T_M_grid, CDS_obs,
-            #     self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
-            args=(t_obs[::5],t0[::5], T_M_grid[:,::5], CDS_obs[::5,:],
+            args=(t_obs, t0, T_M_grid, CDS_obs,
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
+            # args=(t_obs[::5],t0[::5], T_M_grid[:,::5], CDS_obs[::5,:],
+            #     self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
 
             strategy='best1bin',
-            popsize=15, #5, #20,         # larger popsize -> more exploration
-            maxiter=300, # 600, # 800,       # allow many generations
+            popsize=25, #5, #20,         # larger popsize -> more exploration
+            maxiter=500, # 600, # 800,       # allow many generations
             mutation=(0.8, 1.0),
             recombination=0.8,
-            tol=1e-4,# 1e-6,            # looser tolerance
+            tol=1e-5,# 1e-6,            # looser tolerance
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1675,26 +1816,26 @@ class LHC_single():
         )
 
         # If DE failed or hit constraint penalties, bail early
-        # if result.fun >= 1e12:
-        #     return result.x, 0, 0, 0,0
+        if result.fun >= 1e12:
+            return result.x, 0, 0, 0,0
 
 
-        # polish_result = minimize(
-        #     fun=kalman_wrapper,
-        #     x0=result.x,  # <-- Use DE's best solution as the start
-        #     args=(t_obs, t0, T_M_grid, CDS_obs,
-        #           self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
-        #     method='trust-constr',
-        #     bounds = bounds,
-        #     constraints=(nlc,), # <-- Pass the same nonlinear constraints
-        #     options={
-        #         'disp': True,
-        #         'maxiter': 500  # Give it a reasonable number of iterations
-        #     }
-        # )
+        polish_result = minimize(
+            fun=kalman_wrapper,
+            x0=result.x,  # <-- Use DE's best solution as the start
+            args=(t_obs, t0, T_M_grid, CDS_obs,
+                  self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
+            method='trust-constr',
+            bounds = bounds,
+            constraints=(nlc), # <-- Pass the same nonlinear constraints
+            options={
+                'disp': True,
+                'maxiter': 500  # Give it a reasonable number of iterations
+            }
+        )
 
         # --- Use the best result from the two ---
-        polish_result = result
+        # polish_result = result
         if polish_result.success and polish_result.fun < result.fun:
             print(f"--- Local Refinement Succeeded. Final LogLik: {-polish_result.fun} ---")
             optim_params = polish_result.x

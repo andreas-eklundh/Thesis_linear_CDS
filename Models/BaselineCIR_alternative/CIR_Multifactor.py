@@ -35,10 +35,10 @@ class CIRIntensity():
             else:
                 rng = np.random.default_rng(seed)  # independent each time
             # Default (short/med) factors
-            self.kappa = rng.uniform(0.2, 0.8, size=(X_dim,))
+            self.kappa = rng.uniform(0.3, 2, size=(X_dim,))
             # Order. Mainly for identification to make sense.
             # self.kappa = np.sort(self.kappa)[::-1]
-            self.theta = rng.uniform(0.01, 0.4, size=(X_dim,))
+            self.theta = rng.uniform(0.1, 1, size=(X_dim,))
 
             # Assume same for theta for id.
             # self.theta = np.sort(self.theta)[::-1]
@@ -72,13 +72,13 @@ class CIRIntensity():
         if self.cascading:
         # Build matrices for Afine term structure models.
             self.K0 = np.zeros(self.X_dim)
-            self.K0 = self.kappa *  self.theta
+            self.K0[-1] = self.kappa[-1] *  self.theta[-1]
             # K0 = kappa * theta
 
             self.K1 = - np.identity(self.X_dim) *  self.kappa
             for i in range(self.X_dim):
                 if i + 1 < self.X_dim:
-                    self.K1[i, i+1] =  self.kappa[i]
+                    self.K1[i, i+1] =  self.kappa[i] * self.theta[i]
 
             # Non diagonal entries.
             self.H0 = np.zeros((self.X_dim,self.X_dim ))
@@ -148,13 +148,13 @@ class CIRIntensity():
         else:
         # Build matrices for Afine term structure models.
             self.K0 = np.zeros(self.X_dim)
-            self.K0 = kappa * theta
+            self.K0[-1] = kappa[-1] * theta[-1]
             # K0 = kappa * theta
 
             self.K1 = - np.identity(self.X_dim) * kappa
             for i in range(self.X_dim):
                 if i + 1 < self.X_dim:
-                    self.K1[i, i+1] = kappa[i]
+                    self.K1[i, i+1] = kappa[i] * theta[i]
 
             # Non diagonal entries.
             self.H0 = np.zeros((self.X_dim,self.X_dim ))
@@ -372,8 +372,9 @@ class CIRIntensity():
             K1 = - np.identity(self.X_dim) *  kappa_p
             for i in range(self.X_dim):
                 if i + 1 < self.X_dim:
-                    K1[i, i+1] =  kappa_p[i]
-            X0 = np.cumsum(theta_p[::-1])[::-1]
+                    K1[i, i+1] =  kappa_p[i] * theta_p[i]
+            # X0 = np.cumsum(theta_p[::-1])[::-1]
+            X0 =  np.cumprod(theta_p[::-1])[::-1] 
             _,P0 = self.get_cond_var(-K1,
                                      sigma**2*np.diag(X0),0)
 
@@ -417,11 +418,13 @@ class CIRIntensity():
         phis = []
         for i in range(0,unique_delta.shape[0]):
             if self.cascading:
-                phi_0 =  kappa_p * theta_p * unique_delta[i]
+                phi_0 = np.zeros(self.X_dim)
+                phi_0[-1] =  kappa_p[-1] * theta_p[-1] * unique_delta[i]
+
                 phi_1 = np.identity(self.X_dim) + np.identity(self.X_dim) * (-kappa_p) *  unique_delta[i]
                 for j in range(self.X_dim):
                     if j + 1 < self.X_dim:
-                        phi_1[j, j+1] = kappa_p[j] *  unique_delta[i]
+                        phi_1[j, j+1] = theta_p[j]*kappa_p[j] *  unique_delta[i]
                 phis.append([phi_0,phi_1])
             else:
                 phi_0 =  (np.identity(kappa_P_diag.shape[0])-expm(-kappa_P_diag * unique_delta[i])) @ theta_p
@@ -525,9 +528,9 @@ class CIRIntensity():
 
         # Then loop over dates to compute SE
         for date in  range(n):
-            se += np.outer(g[date,:], g[date,:])/ n
+            se += np.outer(g[date,:], g[date,:])
         # SE matrix is inverted cov estimate. Asymptotics
-        se = np.linalg.pinv(se) / n
+        se = np.linalg.pinv(se) 
         se_vec = np.sqrt(np.diag(se))
         return se_vec
 
@@ -587,10 +590,10 @@ class CIRIntensity():
         d = self.X_dim  # number of factors
         # Kappa and theta may be slightly larger than 1 presumably.
         bounds = (
-            [(1e-6, 1)] * d +     # kappa
-            [(1e-6, 1)] * d +     # theta
+            [(1e-6, 2)] * d +     # kappa
+            [(1e-6, 2)] * d +     # theta
             [(1e-6, 2)] * d +     # sigma (assuming per-factor vol)
-            [(-1, 1)] * d +     # lambda1
+            [(-2, 2)] * d +     # lambda1
             [(1e-5, 0.005)]         # sigma_err
         )
         nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
@@ -602,11 +605,11 @@ class CIRIntensity():
             # args=(t_obs[::5], t_mat_grid[:,::5], Y[::5,:]),
             args=(t_obs, t_mat_grid, Y),
             strategy='best1bin',
-            popsize=10, #5, #20,         # larger popsize -> more exploration
+            popsize=20, #5, #20,         # larger popsize -> more exploration
             maxiter=500, # 600, # 800,       # allow many generations
             mutation=(0.8, 1.0),
             recombination=0.8,
-            tol=1e-4,# 1e-6,            # looser tolerance
+            tol=1e-5,# 1e-6,            # looser tolerance
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -620,23 +623,23 @@ class CIRIntensity():
 
         # --- Local Refinement ---
 
-        # polish_result = minimize(
-        # fun=self.Kalman,
-        #     x0=result.x,
-        #     args=(t_obs, t_mat_grid, Y),
-        #     method='trust-constr',
-        #     bounds = bounds,
-        #     constraints=(nonlinear_constraint,),
-        #     options={
-        #         'disp': True,
-        #         'maxiter': 500  # Give it a reasonable number of iterations
-        #     }
-        # )
+        polish_result = minimize(
+        fun=self.Kalman,
+            x0=result.x,
+            args=(t_obs, t_mat_grid, Y),
+            method='trust-constr',
+            bounds = bounds,
+            constraints=(nonlinear_constraint,),
+            options={
+                'disp': True,
+                'maxiter': 500  # Give it a reasonable number of iterations
+            }
+        )
 
-        # params = polish_result.x
-        # self.kalman_obj  = polish_result.fun
-        params = result.x
-        self.kalman_obj  = result.fun
+        params = polish_result.x
+        self.kalman_obj  = polish_result.fun
+        # params = result.x
+        # self.kalman_obj  = result.fun
         # Run and return solution
         log_likelihood,Xn,Zn,Pn = self.Kalman(params,t_obs, t_mat_grid, Y,True)
         se = self.kalman_SE(params,t_obs=t_obs, t_mat_grid=t_mat_grid, Y=Y,result=True)
@@ -681,9 +684,9 @@ class CIRIntensity():
             K1 = np.diag(-kappa.flatten())
             for i in range(self.X_dim):
                 if i + 1 < self.X_dim:
-                    K1[i, i+1] = kappa[i]
-            # K0 = np.zeros(self.X_dim)
-            K0 = kappa * theta
+                    K1[i, i+1] = kappa[i] * theta[i]
+            K0 = np.zeros(self.X_dim)
+            K0[-1] = kappa[-1] * theta[-1]
         else:
             kappa_mat = np.diag(kappa.flatten())
             theta_vec = theta
@@ -739,7 +742,9 @@ class CIRIntensity():
             T_return,X_t = self.simulate_intensity(X0,t0,M,scheme = 'Milstein',
                                                    seed=seed,measure = 'Q')
             # lambda_t is the sum of latent states..
-            lambda_t = np.sum(X_t,axis=1)
+            # lambda_t = np.sum(X_t,axis=1)
+            lambda_t = X_t[:,0]
+
             # Compute prob of default at time t0
             deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
             Lambda = np.cumsum(lambda_t[1:]*deltas)
@@ -794,10 +799,15 @@ class CIRIntensity():
             T_return,X_t = self.simulate_intensity(X0,T,M,scheme = 'Milstein',
                                                    seed=seed,measure='Q')
             # Compute prob of default at time T
-            lambda_t = np.sum(X_t,axis=1)
+            lambda_t = X_t[:,0] # First state is deefault intensity.
             # Compute prob of default at time T
             deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
             Lambda = np.cumsum(lambda_t[1:]*deltas)
+            # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
+            E = expon.rvs(random_state = seed)
+            # Should be zero, but depends on barrier. Default happens at some point below..
+            default_event =  Lambda >= E
+            
             # Get model implies CDS.
             CDS_sim = np.zeros(Lambda.shape)
             for n in range(CDS_sim.shape[0]):
@@ -805,11 +815,9 @@ class CIRIntensity():
                 #                                 interp_struct)
                 CDS_sim[n]  = self.calc_CDS_fast_numba(T_return[n],t0, t_M, X_t[n,:],
                                                 interp_struct)
-
-            # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
-            E = expon.rvs(random_state = seed)
-            # Should be zero, but depends on barrier. Default happens at some point below..
-            default_event =  Lambda >= E
+                # Break loop if default happens at date
+                if default_event[n]:
+                    break
             if np.any(default_event):
                 # In this instance, default has happened as some point. Find index.
                 idx = np.argmax(default_event==1)
@@ -856,16 +864,24 @@ class CIRIntensity():
                                                    seed=seed,measure='Q'
             )
             # Compute prob of default at time T
-            lambda_t = np.sum(X_t,axis=1)
+            # lambda_t = np.sum(X_t,axis=1)
+            lambda_t = X_t[:,0] # First state is deefault intensity.
+
             # Compute prob of default at time T
             deltas = np.array([T_return[i]-T_return[i-1] for i in range(1,M+1)])
             Lambda = np.cumsum(lambda_t[1:]*deltas)
+            # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
+            E = expon.rvs(random_state = seed)
+            # Should be zero, but depends on barrier. Default happens at some point below..
+            default_event =  Lambda >= E
             # Get model implies CDS.
             CDS_sim = np.zeros(Lambda.shape)
             for n in range(CDS_sim.shape[0]):
                 CDS_sim[n]  = self.calc_CDS_fast_numba(T_return[n],t0, t_M, X_t[n,:],
                                                 interp_struct)
-
+                # Break loop if default happens at date
+                if default_event[n]:
+                    break
 
             # Determine if default or not at t0. If lambda>E\simEXPo(1) option payoff is zero.
             E = expon.rvs(random_state = seed)

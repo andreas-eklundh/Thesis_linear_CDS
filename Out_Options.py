@@ -15,7 +15,7 @@ if __name__ == "__main__":
     #### Preliminary investigation.
     sub_df = pd.read_excel("./Data/subset_data.xlsx")
     firms = ['CMZB','DANBNK','MONTE', 'SVSKHB'] # IG,IG,HY,IG
-#     firms = ['CMZB','DANBNK','MONTE']#, 'SVSKHB'] # IG,IG,HY,IG
+    # firms = ['DANBNK','MONTE', 'SVSKHB']#, 'SVSKHB'] # IG,IG,HY,IG
 
     # Pivot
 
@@ -32,6 +32,7 @@ if __name__ == "__main__":
     from Result_plots import print_model_params
 
     X_dims = [1,2] # [1,2,3]
+    # Run 1-2 first. 3 might be very slow. 
     # X_dims = [1,2,3]
     for firm in firms:
         test_df = sub_df[(sub_df['Ticker']==firm)]
@@ -73,7 +74,7 @@ if __name__ == "__main__":
             print_model_params("CIR", final_paramCIR, m=i)
 
             ######## Option Pricing in the Models. Here, we can practically only use Kalman-like models
-            r,delta,tenor = 0.0252,0.4, 0.25
+            r,delta,tenor = 0.00248,0.4, 0.25
             # Initalise LHC model for pricing.
             lhc = LHC_single(r,delta,tenor)
             Y_dim,X_dim = 1,i
@@ -105,10 +106,10 @@ if __name__ == "__main__":
             # Set Simulate option sizes.
             chi0 = np.concatenate((np.array([YnLHCK[-1]]), XnLHCK[-1,:]))
             # Set discretization and number of simul. 1m simuls, fairly coarse grid
-        #     N, M = 1e6, 200
-            N, M = 20000,100
+            N, M = 50000, 100
+            # N, M = 500,100
             seed = 2000
-            leg_deg = 18
+            leg_deg = 18 # 18. This is were it explodes in X_dim=3
 
             ### Get CDSO using theoretical values.
             # Note, we need to discound too, see top vof p. 19

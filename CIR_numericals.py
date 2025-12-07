@@ -2,7 +2,7 @@ from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity as CIR
 import numpy as np
 
 # seed = 37854
-# cir = CIR(0.0252, 0.4, 0.25,X_dim=1)
+# cir = CIR(0.00248, 0.4, 0.25,X_dim=1)
 # T = np.array([1,3,5,10])
 # cir.set_params(params=None, seed=seed)
 # print(cir.kappa,cir.theta,cir.sigma,cir.lambda1,cir.sigma_err)
@@ -25,7 +25,7 @@ import numpy as np
 
 # Seems about right. Try Cascading model.
 seed = 37854
-cir = CIR(0.0252, 0.4, 0.25,X_dim=2)
+cir = CIR(0.00248, 0.4, 0.25,X_dim=2)
 T = np.array([1,3,5,10])
 cir.set_params(params=None, seed=seed)
 print(cir.kappa,cir.theta,cir.sigma,cir.lambda1,cir.sigma_err)

@@ -55,7 +55,7 @@ if __name__ == '__main__':
     ## Some initial guesses. 
     # LHC(2) model - gamma dictates. Y 1-dim, X 2-dim. 
     # Write function to do initial guess. Need dim of y and X
-    lhc = LHC_single( r=0.0252,delta=0.4,cds_tenor= 0.25 )
+    lhc = LHC_single( r=0.00248,delta=0.4,cds_tenor= 0.25 )
     # initialise guesses for params. 
     # set Y_dim=1, X_dim=1 to test remaining logic, X_dim>1 for general purposes.
     # Why? X_dim=1 easy to solve problem if using only one spread. 

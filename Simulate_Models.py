@@ -21,13 +21,38 @@ if __name__ == "__main__":
     for X_dim in [1,2,3]: #,2,3]:
 
         ### Simulate 1 LHC dataset with specific parameter Choises.
-        lhc = LHC(0.0252,0.4,0.25)
+        lhc = LHC(0.00248,0.4,0.25)
         Y_dim,m = 1,X_dim
         # Here, parameters are set already
-        rng = np.random.default_rng(16489)
+        seed = 4000
+        rng = np.random.default_rng(seed)
         X0 = 0.3
         chi0 = np.array([1] + [X0]*m)
         lhc.initialise_LHC(Y_dim,m,X0=X0,rng=rng)
+
+        # Test how drift polynomial looks. 
+        # stationary_lambda = 0.05 / 100
+        # if X_dim > 1:
+        #     mu = lhc.compute_stationary(lhc.kappa, lhc.theta, 
+        #                                         X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
+        #     mu = mu[1]
+        # else:
+        #     mu = 1
+        # drift = lambda l: l**2 - lhc.kappa[0]*l + lhc.kappa[0] * lhc.theta[0]*lhc.gamma1 * mu
+        # gamma_range = np.array([i / 100 * lhc.gamma1*2 for i in range(0,100+1)])
+        # drift_arr = np.array([drift(i) for i in gamma_range])
+        # root1 = lhc.kappa[0] / 2 - np.sqrt(lhc.kappa[0]*(lhc.kappa[0]-4*lhc.gamma1*lhc.theta[0]*mu))/2
+        # root2 =  lhc.kappa[0] / 2 + np.sqrt(lhc.kappa[0]*(lhc.kappa[0]-4*lhc.gamma1*lhc.theta[0]*mu))/2
+        # plt.plot(gamma_range,drift_arr)
+        # plt.vlines(x=lhc.gamma1, ymin = np.min(drift_arr), 
+        #            ymax = np.max(drift_arr),color='red', label='gamma1')
+        # plt.vlines(x=root1, ymin = np.min(drift_arr), 
+        #            ymax = np.max(drift_arr),color='black',label='Lower root')
+        # plt.vlines(x=root2, ymin = np.min(drift_arr), 
+        #            ymax = np.max(drift_arr),color='green',label='upper root')
+        # plt.legend()
+        # plt.show()
+
         lhc.flatten_params()
         params = lhc.flatten_params()
         lhc.unflatten_params(params[:2*m+1])
@@ -58,10 +83,10 @@ if __name__ == "__main__":
         # mat_grid = np.array([5]) 
 
         n_mat = mat_grid.shape[0]
-        T_path, chi_Q = lhc.simul_latent_states(chi0=chi0,T=T,M=M,n_mat=n_mat,seed=200,
+        T_path, chi_Q = lhc.simul_latent_states(chi0=chi0,T=T,M=M,n_mat=n_mat,seed=seed,
                                                 scheme='Milstein',measure='P')
         # Try to simulate Z instead and see if it makes it better...
-        T_path, Z_Q = lhc.simul_Z(chi0=chi0[1:],T=T,M=M,n_mat=n_mat,seed=200,
+        T_path, Z_Q = lhc.simul_Z(chi0=chi0[1:],T=T,M=M,n_mat=n_mat,seed=seed,
                                                 scheme='Euler',measure='P')
         Z_ones = np.hstack([np.ones((Z_Q.shape[0],1)),Z_Q])
         # Holld maturity to be 5
@@ -104,8 +129,8 @@ if __name__ == "__main__":
         CDS_kalman = lhc.CDS_model(T_path,  t_mat_grid, CDS_simul.T , 
                                    t0=T_path, X_in=Xn_kalman.T,Y_in=Yn_kalman) 
 
-        # FILIPOVIC SECTION
-        lhc_filipovic_params= lhc.optimize_params(T_path, t_mat_grid, CDS_simul.T)
+        # FILIPOVIC SECTION . use actual cds to be 100% true to model assumption
+        lhc_filipovic_params= lhc.optimize_params(T_path, t_mat_grid, CDS_simul_actual.T,base_seed=2000)
     
         # After optimize, define lhc model for inputting.
         # ---- Get states ----
@@ -214,8 +239,8 @@ if __name__ == "__main__":
         #### CIR SIMULATION. ######
         save_path = "./Simulation_studies/"   # <--- change to your path
 
-        seed = 1000
-        cir = CIR(0.0252, 0.4, 0.25,X_dim,cascading=True)
+        seed = 4000
+        cir = CIR(0.00248, 0.4, 0.25,X_dim,cascading=True)
         r = cir.r
         delta = cir.delta
         tenor = cir.tenor 
@@ -230,7 +255,9 @@ if __name__ == "__main__":
         # beta = 2 * cir.kappa_p /  cir.sigma**2
         # # CIR values.
         # lambda0 =( alpha / beta )  # start below long term (halfway there)
-        lambda0 = np.cumsum(cir.theta_p[::-1])[::-1] # In the CIR cascading.
+        # lambda0 = np.cumsum(cir.theta_p[::-1])[::-1] # In the CIR cascading.
+        lambda0 = np.cumprod(cir.theta_p[::-1])[::-1] # In the CIR cascading.
+
         # This is under Q 
         # T_return,lambda_eul_Q = cir.simulate_intensity(lambda0=lambda0,T=T,M=M,
         #                                                scheme="Euler",seed=seed,measure='P')
@@ -323,7 +350,8 @@ if __name__ == "__main__":
         # Kalman noise.
         R = norm.rvs(size = (Gamma_kalman.shape[0]*Gamma_kalman.shape[1]),scale = cir.sigma_err,random_state=10).reshape(Gamma_kalman.shape) # simulate at beginning - faster!
         # Divide gamma process by time to mat.
-        Gamma_kalman_noise = Gamma_kalman/ mat_grid[None, :]  + R
+        Gamma_kalman_noise = Gamma_kalman /mat_grid[None, :]  + R
+        # Gamma_kalman_noise = Gamma_kalman + R
 
         ## Try Estimation of Correct model
         Lambda_kalman = np.zeros(shape = (T_return.shape[0], mat_grid.shape[0]))
@@ -332,7 +360,7 @@ if __name__ == "__main__":
         R = norm.rvs(size = (Lambda_kalman.shape[0]*Lambda_kalman.shape[1]),
                     scale = cir.sigma_err,random_state=10).reshape(Lambda_kalman.shape) # simulate at beginning - faster!
 
-        Lambda_kalman_noise = Lambda_kalman/mat_grid[None, :]   + R
+        Lambda_kalman_noise = Lambda_kalman/mat_grid[None, :]    + R
         ## Run one kalman filter to see identification...
         color_cycle = plt.cm.tab10.colors  
 
@@ -371,7 +399,7 @@ if __name__ == "__main__":
         for i in range(Lambda_kalman.shape[1]):
             color = color_cycle[i % len(color_cycle)]
             ax1.scatter(T_return, Zn_cir[:, i], alpha=0.9, color=color, label=f"Kalman Gamma{mat_grid[0]}")
-            # ax1.plot(T_return, Gamma_kalman[:, i], "--", alpha=0.9, color=color, label=f"Actual Gamma{mat_grid[0]}")
+            ax1.plot(T_return, Gamma_kalman[:, i], "--", alpha=0.9, color=color, label=f"Actual Gamma{mat_grid[0]}")
             # ax1.plot(T_return, Zn_cir_l[:, i], "--", alpha=0.9, color=color, label=f"Kalman Lambda{mat_grid[0]}")
             ax1.plot(T_return, Lambda_kalman[:, i], "--", alpha=0.9, color=color, label=f"Actual Lambda{mat_grid[0]}")
 
@@ -461,7 +489,7 @@ if __name__ == "__main__":
 
         print(f'Done with CIR({X_dim})')
 
-    # SEction to investigate misspecification.
+    # # SEction to investigate misspecification.
 
 
 

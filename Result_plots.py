@@ -273,7 +273,7 @@ if __name__ == "__main__":
     ###############################################################################
 
     ######## Option Pricing in the Models. Here, we can practically only use Kalman-like models
-    r,delta,tenor = 0.0252,0.4, 0.25
+    r,delta,tenor = 0.00248,0.4, 0.25
     # Initalise LHC model for pricing.
     lhc = LHC_single(r,delta,tenor)
     Y_dim,X_dim = 1,2
