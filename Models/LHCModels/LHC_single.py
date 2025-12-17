@@ -1040,11 +1040,6 @@ def kalman_wrapper(params, t_obs,t0,T_M_grid,CDS_obs,X0,m,r, Y_dim, delta, tenor
 
 # @njit
 def nonlinear_constraints( params, m):
-    """
-    Vector-valued constraint function for NonlinearConstraint.
-    Returns array `cons` such that cons >= 0 are feasible.
-    If params can't be unpacked properly, returns a negative array (infeasible).
-    """
     m = int(m)
     # expected number of constraints: g1, g2 and 2*m for g3,g4 converted -> total 2 + 2*m
     params_p = np.asarray(params, dtype=float)
@@ -1081,10 +1076,10 @@ def nonlinear_constraints( params, m):
 
     ### Note, the constraints on theta_p and kappa_p still needs to hold...
     # Drift away from zero...
-    g1 = theta[-1] * kappa[-1] - 0.5 * (sigma[-1]**2)
+    g1 = theta[-1] * kappa[-1]  - 0.5 * (sigma[-1]**2)
     cons.append(np.asarray(g1).flatten())
 
-    g1 = theta_p[-1] * kappa_p[-1] - 0.5 * (sigma[-1]**2)
+    g1 = theta_p[-1] * kappa_p[-1]  - 0.5 * (sigma[-1]**2)
     cons.append(np.asarray(g1).flatten())
 
 
@@ -1133,14 +1128,14 @@ def nonlinear_constraints( params, m):
     #         g6 = kappa[i] - kappa[i+1] + 1e-4
     #     cons.append(np.asarray(g6).flatten())
 
-    stationary_lambda = 0.05 / 100
-    X_dim = kappa.shape[0]
-    if X_dim > 1:
-        mu = compute_stationary(kappa, theta, 
-                                            X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
-        upper_lim_theta_1 =np.minimum(1/2 * mu[1]**(-1),1/2) # always second entrance
-    else: 
-        upper_lim_theta_1 = 1 / 2
+    # stationary_lambda = 0.05 / 100
+    # X_dim = kappa.shape[0]
+    # if X_dim > 1:
+    #     mu = compute_stationary(kappa, theta, 
+    #                                         X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
+    #     upper_lim_theta_1 =np.minimum(1/2 * mu[1]**(-1),1/2) # always second entrance
+    # else: 
+    upper_lim_theta_1 = 1 / 2
     g5 = upper_lim_theta_1 - theta[0]
     cons.append(np.asarray(g5).flatten())
 
@@ -1210,8 +1205,8 @@ class LHC_single():
         # Assumption to ensure proper initilialization.
         # Draw kappa1,theta1
         self.kappa = np.zeros(X_dim)
-        # Kappa can be chosen freely elbeit subject to the 5bps constr. 
-        self.kappa[0] = rng.uniform(self.stationary_lambda,1, size=(1,))       # Kappa given
+        # Kappa can be chosen freely elbeit subject to the 5bps constr. Not strictly necessary anolonger
+        self.kappa[0] = rng.uniform(0,1, size=(1,))       # Kappa given
         # Theta can be chosen freely for all but i=1.
         self.theta = np.zeros_like(self.kappa)
         # Draw gamma1 - depends only on kappa_1 (kept theta placeholeder)
@@ -1221,53 +1216,10 @@ class LHC_single():
         
         # Thetas must adhere to constraint.
         self.theta[1:] = rng.uniform(0, 1- self.gamma1 / self.kappa[1:] , size=(X_dim - 1,))
-
-        # We can then draw theta1. This should be added as constraint.
-        stationary_lambda = 0.05 / 100
-        if X_dim > 1:
-            mu = self.compute_stationary(self.kappa, self.theta, 
-                                                X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
-            # Take minimum as the fraction with mu can explode. f
-            upper_lim_theta_1 =np.minimum(1/2 * mu[1]**(-1),1/2) # always second entrance
-        else: 
-            upper_lim_theta_1 = 1 / 2
+        upper_lim_theta_1 = 1 / 2
         # Finally, draw theta.
         self.theta[0] = rng.uniform(0, upper_lim_theta_1 , size=(1,))
-        # Then 
-        # Draw remaining thetas:
-        # self.kappa[1:] = rng.uniform(self.theta[0]/2,1, size=(X_dim-1,))
-        # # Finally draw theta
-        # if X_dim > 1:
-        #     self.theta[1:] = rng.uniform(0.0001, 1 - self.theta[0] / (2*self.kappa[1:]) , size=(X_dim-1,))
-
-        # self.theta = np.sort(self.theta)[::-1] # Sort descending
-
-        # self.theta = lambda_bar1 / self.kappa
-
-        # gamma1 calculated under Q.
-        # self.gamma1 = self.calc_gamma1(self.kappa,self.theta,lambda_i=None)
-        # self.gamma1 = rng.uniform(0.00, np.min((1-self.theta)*self.kappa) , size=(Y_dim,))
-        # self.theta = np.sort(self.theta)
-        # self.gamma1 = np.array([self.theta[0] / 4]) # rng.uniform(0, self.kappa, size=(Y_dim,))    # gamma1 strictly pos.
-        # Based on that, select kappa freely. But at some magnitude to ensure gamma too.
-        # self.kappa = rng.uniform(0.1, 1, size=(X_dim,))       # Kappa given
-        # self.kappa = np.sort(self.kappa)
-        ### Theta needs to be in (0,1)
-        # Then gamma has a constraint
-
-        # kappa_bound = self.kappa[0] / (1+self.kappa[0])
-        # The only real important thing is that we assume gamma bounded by min theta.
-        # To adhere to smaller then theta - need theta bound.
-        # To adhere to drift: drift cond.
-
-        # self.gamma1 = rng.uniform(0, self.kappa, size=(Y_dim,))    # gamma1 strictly pos.
-
-        # Freedom to choose.
-        # self.theta = rng.uniform(0.00, 1-self.gamma1/self.kappa, size=(X_dim,))       # Theta coeffs
-        # Overwrite first theta
-        # self.theta = rng.uniform(0.00, 1, size=(X_dim,))
-
-
+        
         # The new assumption
 
         # Build b, beta, A, gamma
@@ -1508,14 +1460,14 @@ class LHC_single():
             cons.append(np.asarray(g3).flatten())
 
         # Add  constraint on theta 1
-        stationary_lambda = 0.05 / 100
-        X_dim = kappa.shape[0]
-        if X_dim > 1:
-            mu = compute_stationary(kappa, theta, 
-                                                X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
-            upper_lim_theta_1 = np.minimum(1/(2 * mu[1]),1/2) # always second entrance
-        else: 
-            upper_lim_theta_1 = 1 / 2
+        # stationary_lambda = 0.05 / 100
+        # X_dim = kappa.shape[0]
+        # if X_dim > 1:
+        #     mu = compute_stationary(kappa, theta, 
+        #                                         X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
+        #     upper_lim_theta_1 = np.minimum(1/(2 * mu[1]),1/2) # always second entrance
+        # else: 
+        upper_lim_theta_1 = 1 / 2
         g5 = upper_lim_theta_1 - theta[0]
         cons.append(np.asarray(g5).flatten())
 
@@ -1545,7 +1497,7 @@ class LHC_single():
         #     }
         # )
         bounds = (
-                [(self.stationary_lambda, 2)] * self.m +     # kappa
+                [(1e-6, 2)] * self.m +     # kappa
                 [(1e-6,1/2)] +
                 [(1e-6, 1)] * (self.m-1)      # theta
                 # [(1.e-6,1)]         # gamma1
@@ -1644,7 +1596,7 @@ class LHC_single():
                 #     lambda_i[i] = rng.uniform(-1,
                 #                             (self.kappa[i] - self.theta[i]*self.kappa[i] -
                 #                             self.gamma1),size=(1,)) # initialise gamma to comply.
-                lambda_i[i] =  rng.uniform(-1,
+                lambda_i[i] =  rng.uniform(-0.6,
                                         (self.kappa[i] - self.kappa[i]*self.theta[i] -
                                             self.gamma1),size=(1,))
             # Try lambda to zero.
@@ -1758,22 +1710,22 @@ class LHC_single():
         t0 = t_obs
         if self.m == 1:
             bounds = (
-                [(self.stationary_lambda, 2)] * m +     # kappa
+                [(1e-6, 2)] * m +     # kappa
                 [(1e-6,1/2)] * m +     # eta=theta*gamma1. Same bounds. Restriction justified here
                 # [(0.0001,1)] +        # gamma1
-                [(-2, 2)] * m  +         # lambda_p
+                [(-0.6, 0.6)] * m  +         # lambda_p restrict it
                 [(1e-6, 1.5)] * m +     # sigma
-                [(1e-6, 0.001)]         # sigma_err. Unrealistic measure noise is more than 50 Bps
+                [(1e-6, 0.01)]         # sigma_err. Unrealistic measure noise is more than 50 Bps
             )
         else:
             bounds = (
-                [(self.stationary_lambda, 2)] * m +     # kappa. Set to 1
+                [(1e-6, 2)] * m +     # kappa. Set to 1
                 [(1e-6, 1/2)]  +     # eta=theta*gamma1. Same bounds.
                 [(1e-6, 1)] * (m-1) +     # eta=theta*gamma1. Same bounds.
                 # [(0.0001,1)] +        # gamma1
-                [(-2, 2)] *(m)  +     # lambda_p
+                [(-0.6, 0.6)] * m  +         # lambda_p restrict it
                 [(1e-6, 1.5)] * m +     # sigma
-                [(1e-5, 0.001)]         # sigma_err - very small
+                [(1e-5, 0.01)]         # sigma_err - very small
             )
         nlc = NonlinearConstraint(lambda x: nonlinear_constraints(x,self.m), 0, np.inf)
         # theta_index = m   # Index of theta[0]
@@ -1800,13 +1752,13 @@ class LHC_single():
                 self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
             # args=(t_obs[::5],t0[::5], T_M_grid[:,::5], CDS_obs[::5,:],
             #     self.X0,self.m,self.r, self.Y_dim, self.delta, self.tenor),
-
-            strategy='best1bin',
-            popsize=25, #5, #20,         # larger popsize -> more exploration
-            maxiter=500, # 600, # 800,       # allow many generations
-            mutation=(0.8, 1.0),
-            recombination=0.8,
-            tol=1e-5,# 1e-6,            # looser tolerance
+            # Giving much more to global optimizer due to more difficult
+            strategy='best1bin',        
+            popsize=5 * self.m,     
+            maxiter=2000,               
+            mutation=(0.3, 0.8),        
+            recombination=0.7,          
+            tol=1e-3,   
             # workers=1,
             # updating='immediate',
             workers=-1,
@@ -1829,11 +1781,13 @@ class LHC_single():
             bounds = bounds,
             constraints=(nlc), # <-- Pass the same nonlinear constraints
             options={
-                'disp': True,
-                'maxiter': 500  # Give it a reasonable number of iterations
+                'disp': False,
+                'maxiter': 75,
+                'gtol': 1e-4,   
+                'xtol': 1e-6,   
+                'barrier_tol': 1e-3, 
             }
         )
-
         # --- Use the best result from the two ---
         # polish_result = result
         if polish_result.success and polish_result.fun < result.fun:
@@ -1878,7 +1832,7 @@ class LHC_single():
         self.unflatten_params(params_q)
         # Get SE
         kalman_args = (t_obs,t0,T_M_grid,CDS_obs,lhc_p,lhc_q,self.X0)
-        se = self.kalman_SE(params_opt=optim_params,f_args=kalman_args,eps = 1e-9)
+        se = self.kalman_SE(params_opt=optim_params,f_args=kalman_args,eps=1e-6)
         # Get induced likelihood.
         ll = np.sum(neg_log_lik)
         
@@ -2168,6 +2122,7 @@ class LHC_single():
         # N prices are comuted and averaged MC
         N_strikes = barriers.shape[0]
         prices = np.zeros(shape = (N,N_strikes))
+        test_MC =  np.zeros(shape = (N,N_strikes))
         prices_MC_hist = np.zeros(shape = (N,N_strikes))
         lhc = rebuild_lhc_struct(self.kappa, self.theta, self.gamma1[0], self.r,
                             self.Y_dim, self.delta, self.tenor)
@@ -2202,12 +2157,11 @@ class LHC_single():
                 max_cds_to_default = np.max(CDS_sim)
                 b_idx = np.where(max_cds_to_default >= barriers)
                 prices[i,b_idx] = np.exp(-self.r * (T - t))
-
+            b_idx = np.where(np.max(CDS_sim) >= barriers)
             prices_MC_hist[i, :] = np.mean(prices[:i+1, :], axis=0)
             seed += 1
         print(f'Digital done')
         price_MC = np.mean(prices,axis = 0)
-
         return prices_MC_hist,price_MC
 
     # Simulate Lookback in the model.
@@ -2280,9 +2234,9 @@ class LHC_single():
         Lint, _ = quad(
             lambda x: (x * self.gen_legendre_poly(x,n,b_min,b_max)),
             0, b_max,
-            limit=100,
-            epsabs=1e-6,
-            epsrel=1e-6
+            limit=1000,
+            epsabs=1e-8,
+            epsrel=1e-8
         )
         return np.exp(-self.r * (t0-t)) * Lint/ Y
 
@@ -2528,7 +2482,7 @@ class LHC_single():
         start = time.time()
         G_n = polyclass.generator_matrix()
         end = time.time()
-        print(f"Time of G_N {end-start}")
+        print(f"Time of G_N {end-start}, shape={G_n.shape[0]}")
         mat_expo = expm(G_n*(t0-t))
         chi0 =  np.append([Y_t],X_t)
         chi_dict = dict(zip(chi_syms,chi0))
@@ -2546,9 +2500,11 @@ class LHC_single():
             # Loop from 0 to n+1 (n)
             b_min,b_max = self.get_bBounds(t0, t_M,k)
             legendre_coeff = self.get_scaled_legendre_coeffs(n_max,b_min,b_max)
+            # Using recursion, should be calculated here. 
+            c_pi_val = np.zeros(alphas.shape[1])
             moments[i,:] = moments_Z(alphas,t,t0,t_M,k,y=Y_t,X=X_t,n_max=n_max,
                                           basis=np.array(basis,dtype = float),
-                                          mat_expo=mat_expo,idx_col_map=idx_col_map,lhc=lhc)
+                                          mat_expo=mat_expo,idx_col_map=idx_col_map,lhc=lhc,c_pi_val=c_pi_val)
             # Finally do the legendre approximatino
             for j in range(n_max+1):
                 f_j = self.f_n(j,t,t0,b_min,b_max,Y_t)
@@ -2562,8 +2518,8 @@ class LHC_single():
 
 
 ### compute c_pi in numba for faster comp.
-@njit
-def c_pi(alpha,psi_cds_val):
+# @njit
+def c_pi(alphas,alpha,psi_cds_val,c_pi_val):
     # Base case: alpha all zeros
     if np.sum(alpha) == 0:
         return 1.0  # or 1.0 if needed by context
@@ -2573,20 +2529,56 @@ def c_pi(alpha,psi_cds_val):
         idx = np.argmax(alpha)
         return psi_cds_val[idx]
 
-    # Recursive case: sum alpha > 1
+    # Recursive case: sum alpha > 1. Use previous vals
     c = 0.0
     d = len(alpha)
     for i in range(d):
         if alpha[i] -1 >=0 :
             alpha_minus = alpha.copy()
             alpha_minus[i] -= 1
-            c += psi_cds_val[i] * c_pi(alpha_minus, psi_cds_val)
+            idx = np.argmax(np.sum(alphas==np.array([alpha_minus]).T,axis=0)==psi_cds_val.shape[0])
+            c += psi_cds_val[i] * c_pi_val[idx]
     return c
 
 
+
+# Sugegstio for faster imp.
+# @njit
+def c_pi_fast(alpha, psi):
+    # compute the demoninator of the multinomial coefficient
+    deg = 0
+    denominator = 1
+    # loop over the alpha in question
+    for i in range(alpha.size):
+        # Ingrement to get the degree of alpha
+        deg += alpha[i]
+        # factorial of alpha[i]
+        alpha_i = alpha[i]
+        alpha_i_fac = 1
+        # Factorial of alpha_i
+        for k in range(1, alpha_i+1):
+            alpha_i_fac *= k
+        # add to toal 
+        denominator *= alpha_i_fac
+
+    # factorial of the degree of the multindex
+    numerator = 1
+    for i in range(1, deg+1):
+        numerator *= i
+
+    multinomial_coeff = numerator / denominator
+
+    # Compute psi monomial product 
+    prod = 1.0
+    for i in range(alpha.size):
+        alpha_i = alpha[i]
+        prod *= psi[i]**alpha_i
+
+    return multinomial_coeff * prod
+
 # can work for n=1
-@njit
-def moments_Z(alphas,t,t0,t_M,k,y,X,n_max,basis,mat_expo,idx_col_map,lhc):
+# @njit
+def moments_Z(alphas,t,t0,t_M,k,y,X,n_max,basis,mat_expo,idx_col_map,lhc,c_pi_val):
     ### Loop over alpha indices. These correspond to desired basis.
     ### Compute CDS spread moments.
     # psi_cds_vec = self.psi_cds(t0,t0,t_M,k)
@@ -2599,10 +2591,23 @@ def moments_Z(alphas,t,t0,t_M,k,y,X,n_max,basis,mat_expo,idx_col_map,lhc):
         # Find cols of alphas that should be summed.
         idx_sum = np.where(np.sum(alphas,axis=0)==n)[0]
         alphas_comp = alphas[:,idx_sum]
-
+        
         for idx in range(alphas_comp.shape[1]):
+            ## Fill out values
+            # start = time.time()
+            # curr_index = np.argmax(np.sum(
+            #     alphas==np.array([alphas_comp[:,idx]]).T,axis=0)==psi_cds_vec.shape[0])
+            # c_pi_val[curr_index] = c_pi(alphas,alphas_comp[:,idx],
+            #                                                             psi_cds_vec,c_pi_val)
             # poly, chi_ennum = self.h_poly(alphas_comp[:,idx],y,X,chi_syms)
-            c_pi_val = c_pi(alphas_comp[:,idx],psi_cds_vec)
+            # c_pi_val = c_pi(alphas_comp[:,idx],psi_cds_vec)
+            # end = time.time()
+            # print(f'Time of recursion method: {end-start}')
+            # start = time.time()
+            c_pi_val2 = c_pi_fast(alphas_comp[:,idx],psi_cds_vec)
+            # end = time.time()
+            # print(f'Time of new method: {end-start}')
+
             # Get the index of the expectation to compute. Generally works for cond exp
             # e_i = np.zeros(shape = len(basis_class))
             e_i = np.zeros(shape = basis.shape[0])
@@ -2612,7 +2617,7 @@ def moments_Z(alphas,t,t0,t_M,k,y,X,n_max,basis,mat_expo,idx_col_map,lhc):
 
             term = basis.T @ mat_expo @ e_i
 
-            moments[n] += c_pi_val * term[0]
+            moments[n] += c_pi_val2 * term[0]
 
     return moments
 

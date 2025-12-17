@@ -88,7 +88,7 @@ for var in ['X', 'Y', 'Z']:
                 ax.plot(T_path, Y_trans, linestyle='--', marker='', label='Y Transformed', color='blue')
                 ax.set_ylabel('Y value')
             elif var == 'X':
-                # if multiple X components, plot first component (or you can plot all)
+                # if multiple X components, plot first component 
                 ax.plot(T_path, X_true, linestyle='-', marker='', label='X True', color='red')
                 ax.plot(T_path, X_trans, linestyle='--', marker='', label='X Transformed', color='blue')
                 ax.set_ylabel('X value')

@@ -38,13 +38,12 @@ data_mod['Tenor_int'] = data_mod['Tenor'].str.strip('Y').apply(int)
 # Loop through each ticker
 for ticker in tickers:
     df_ticker = data_mod[data_mod['Ticker'] == ticker]
-
     # Pivot to make each tenor a column
     df_ticker = df_ticker.sort_values(by = ['Tenor_int'])
     pivot = df_ticker.pivot(index='Date', columns='Tenor_int', values='Par Spread')
-
+    pivot = pivot[[1,2,3,4,5,7,10]]
     # Plot
-    pivot.plot(figsize=(12, 6), title=f"Spread Time Series for {ticker}")
+    pivot.plot(figsize=(12, 6))
     plt.xlabel("Date")
     plt.ylabel("Par Spread")
     plt.legend(title="Tenor (Y)", loc="upper left")

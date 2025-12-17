@@ -28,8 +28,8 @@ class global_fit_measures:
             rmse[i] = np.sqrt(np.sum(diff)/(self.n_mat*self.n_obs))
             rmse_series[:,i] = np.sqrt(np.sum(diff,axis=1)/(self.n_mat))
 
-            
-        return rmse_series, rmse
+        # Convert to bps 
+        return rmse_series * 10000, rmse * 10000
 
     # Average Absolite error as percentage of mean price:
     def ape(self):
@@ -52,7 +52,7 @@ class global_fit_measures:
             aae[i] = np.sum(diff)/(self.n_mat*self.n_obs)
             aae_series[:,i] = np.sum(diff,axis=1)/(self.n_mat)
 
-        return aae_series,aae
+        return aae_series * 10000,aae * 10000
 
     #Average relative percentage error:
     def arpe(self):

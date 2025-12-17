@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
         t = np.array(test_df['Years'])
 
-        mat_grid = np.array([1,3,5,7,10])
+        mat_grid = np.array([1,2,3,4,5,7,10])
         # mat_grid = np.array([5])
         t0 = 0.0
         t_mats = np.concatenate(([t0], mat_grid))
@@ -39,7 +39,9 @@ if __name__ == "__main__":
         # Payments are then every 0.25 year.     
 
         # Get payment grids of quarterly.
-        CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
+        # CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
+        CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']].ffill().bfill())
+
         # CDS_obs = np.array(test_df[['5Y']].ffill().bfill())
         model = DeterministicGamma(r, delta, tenor)
 
@@ -86,7 +88,7 @@ if __name__ == "__main__":
 
         t = np.array(test_df['Years'])
 
-        mat_grid = np.array([1,3,5,7,10])
+        mat_grid = np.array([1,2,3,4,5,7,10])
         t0 = 0.0
         t_mats = np.concatenate(([t0], mat_grid))
 
@@ -96,7 +98,7 @@ if __name__ == "__main__":
         # Payments are then every 0.25 year.     
 
         # Get payment grids of quarterly.
-        CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
+        CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']].ffill().bfill())
         model = DeterministicGamma(r, delta, tenor)
 
         # RUN LATER - MORE CONSUMING

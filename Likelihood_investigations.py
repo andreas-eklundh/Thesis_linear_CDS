@@ -17,12 +17,12 @@ import matplotlib.pyplot as plt
 # ### Simulate 1 LHC dataset with specific parameter Choises.
 if __name__ == '__main__':
     # X_dim =1
-    # T,M = 10, 100
+    # T,M = 10, 1000
     # cir = CIR(0.00248,0.4,0.25,X_dim,cascading=True)
     # # Here, parameters are set already
-    # seed = 2000
+    # seed = 4000
 
-    # rng = np.random.default_rng(2000)
+    # rng = np.random.default_rng(4000)
     # r = cir.r
     # delta = cir.delta
     # tenor = cir.tenor
@@ -37,13 +37,8 @@ if __name__ == '__main__':
     # # CIR values.
     # lambda0 = np.cumsum(cir.theta_p[::-1])[::-1] # In the CIR cascading.
     # # This is undekkr Q
-    # T_return,lambda_eul_Q = cir.simulate_intensity(lambda0=lambda0,T=T,M=M,scheme="Euler",seed=seed,measure='P')
     # T_return,lambda_mil_Q = cir.simulate_intensity(lambda0=lambda0,T=T,M=M,scheme="Milstein",seed=seed,measure='P')
-    # simuls = np.hstack([lambda_eul_Q,lambda_mil_Q])
-    # plt.plot(T_return,lambda_eul_Q,color = 'red', label = 'euler' )
-    # plt.plot(T_return,lambda_mil_Q,color = 'blue', label = 'milstein' )
-    # plt.legend()
-    # plt.show()
+
     
     # mat_grid = np.array([1,3,5,7,10])
     # t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + T_return[None, :])   # shape (len(T_M_grid), len(t_obs))
@@ -87,7 +82,7 @@ if __name__ == '__main__':
     # # Add noise to kalman
     # R = norm.rvs(size = (Gamma_kalman.shape[0]*Gamma_kalman.shape[1]),
     #               scale = cir.sigma_err,random_state=10).reshape(CDS_cir.shape) # simulate at beginning - faster!
-    # Gamma_kalman_noise = Gamma_kalman/ mat_grid[None, :] + R
+    # Gamma_kalman_noise = Gamma_kalman+ R
 
     # # While the above is the actual approach taken when real data, test completely in 
     # # a test environment. 
@@ -109,8 +104,11 @@ if __name__ == '__main__':
     # #     CDS_cir_kalman_trans[n,:] = cir.cds_spread(Xn_trans[n,:],params_cir_kalman_trans,T_return[n],t_mat_grid[:,n])
     # #     print(f'Done with {(n+1)/Lambda_kalman_noise[:,0].shape[0]} %')
 
-    # ll,params_cir_kalman , Xn,Zn,Pn,se = cir.run_kalman_filter(T_return, t_mat_grid, Gamma_kalman_noise)
-
+    # # ll,params_cir_kalman , Xn,Zn,Pn,se = cir.run_kalman_filter(T_return, t_mat_grid, Gamma_kalman_noise)
+    # # Read in the fitted kalman filter instead
+    # files_loc = f"./Simulation_studies/cir_parameter_comparison_Xdim{X_dim}.xlsx"
+    # df = pd.read_excel(files_loc)
+    # params_cir_kalman = np.array(df['Estimated Kalman'])
 
     # # assuming lhc.flatten_params() returns [kappa, theta, gamma1, sigma, lambda_i, sigma_err]
     # true_params = {
@@ -132,14 +130,14 @@ if __name__ == '__main__':
 
     # # Define relative/absolute spreads for scanning
     # grid_spread = {
-    #     "kappa": 0.3,
-    #     "theta": 0.3,
-    #     "sigma": 0.3,
-    #     "lambda1": 0.5,     # absolute
-    #     "sigma_err": 0.3
+    #     "kappa": 0.05,
+    #     "theta": 0.05,
+    #     "sigma": 0.05,
+    #     "lambda1": 0.1,     # absolute
+    #     "sigma_err": 0.05
     # }
 
-    # n_points = 60
+    # n_points = 20
     # grids = {}
     # for key, val in true_params.items():
     #     spread = grid_spread[key]
@@ -147,6 +145,7 @@ if __name__ == '__main__':
     #     if key == "lambda1":
     #         # min_bound = - cir.theta*cir.kappa
     #         max_bound = cir.kappa
+    #         max_bound = np.minimum(max_bound-0.001,val + spread)
     #         grids[key] = np.linspace(val - spread,max_bound, n_points)
     #     else:
     #         grids[key] = np.linspace(max(1e-6, val * (1 - spread)), val * (1 + spread), n_points)
@@ -180,9 +179,11 @@ if __name__ == '__main__':
     #         cir.set_params(params)
     #         # Check if feller satisfied. if not flag and color differently.
     #         if np.any(cir.feller_constraint(params_cir) <0):
-                
     #             print('Feller Condition Failed')
-    #         neg_log_like = cir.Kalman(params,T_return, t_mat_grid, Gamma_kalman_noise ,False)
+    #             neg_log_like = np.nan
+
+    #         else:
+    #             neg_log_like = cir.Kalman(params,T_return, t_mat_grid, Gamma_kalman_noise ,False)
     #         if neg_log_like == 1e12:
     #             neg_log_like = np.nan
     #         results.append({
@@ -250,7 +251,7 @@ if __name__ == '__main__':
         lhc = LHC_single(0.00248,0.4,0.25)
         Y_dim,m = 1,X_dim
         # Here, parameters are set already
-        rng = np.random.default_rng(16489)
+        rng = np.random.default_rng(4000)
         X0 = 0.4
         lhc.initialise_LHC(Y_dim,m,X0=X0,rng=rng)
         params = lhc.flatten_params()
@@ -269,7 +270,7 @@ if __name__ == '__main__':
         n_mat = mat_grid.shape[0]
         # Set initial values to be mu.
         # Use the Euler scheme as estimation is happening under too. 
-        T_path, chi_Q = lhc.simul_latent_states(chi0=chi0,T=T,M=M,n_mat=n_mat,seed=3000,scheme='Milstein',
+        T_path, chi_Q = lhc.simul_latent_states(chi0=chi0,T=T,M=M,n_mat=n_mat,seed=4000,scheme='Milstein',
                                                 measure='P')
 
 
@@ -294,7 +295,7 @@ if __name__ == '__main__':
         files_loc = f"./Simulation_studies/lhc_parameter_comparison_Xdim{X_dim}.xlsx"
         df = pd.read_excel(files_loc)
         lhc_kalman_params = np.array(df['Estimated Kalman'])
-
+        test  = np.array(df['True'])
         # lhc_kalman_params =np.concatenate([lhc_kalman_params[:2*m], lhc.gamma1, lhc_kalman_params[2*m:]])
         # same for se - Not directly clear.
         # se =np.concatenate([se[:2*m],np.array([0]), se[2*m:]])
@@ -321,12 +322,12 @@ if __name__ == '__main__':
 
         # Spread (relative or absolute)
         grid_spread = {
-            "kappa": 0.15,
-            "theta": 0.15,
+            "kappa": 0.05,
+            "theta": 0.05,
             # "gamma1": 0.05,
-            "lambda_i": 0.2,
-            "sigma": 0.15,
-            "sigma_err": 0.15
+            "lambda_i": 0.1,
+            "sigma": 0.05,
+            "sigma_err": 0.05
         }
 
         n_points = 15
@@ -383,7 +384,8 @@ if __name__ == '__main__':
 
                 if key == 'lambda_i':
                     lower = v - spread
-                    upper = v + spread
+                    max_bound = np.minimum( grid_spread['kappa'] -0.001,val + spread)
+                    upper = max_bound
                 else:
                     lower = v * (1 - spread)
                     upper = v * (1 + spread)
@@ -458,8 +460,8 @@ if __name__ == '__main__':
                             #     Y_dim=lhc.Y_dim, delta=lhc.delta, tenor=lhc.tenor
                             # )
                             neg_log_like = kalman_wrapper(
-                                params_vec, T_path[::5], T_path[::5], t_mat_grid[:,::5],
-                                CDS_simul_actual.T[::5,:],
+                                params_vec, T_path, T_path, t_mat_grid,
+                                CDS_simul_actual.T,
                                 X0=lhc.X0, m=lhc.m, r=lhc.r,
                                 Y_dim=lhc.Y_dim, delta=lhc.delta, tenor=lhc.tenor
                             )
@@ -520,5 +522,295 @@ if __name__ == '__main__':
         plt.tight_layout()
         plt.savefig(f"./Likelihoods/Likelihoods_dual_X{X_dim}.png", dpi=150)
         plt.close()
+
+
+    #### See likelihood profiles for gamma1:
+
+
+
+
+    # ============= INITIALIZE LHC ============= #
+    # ### Simulate 1 LHC dataset with specific parameter Choises
+    from Models.LHCModels.LHC_wGamma1 import LHC_single as LHC_single, kalman_wrapper,build_P_params,rebuild_lhc_struct
+    from  Models.LHCModels.LHC_wGamma1 import rebuild_lhc_struct, get_CDS_Model, nonlinear_constraints
+    for X_dim in [1,2,3]:
+        
+        lhc = LHC_single(0.00248,0.4,0.25)
+        Y_dim,m = 1,X_dim
+        # Here, parameters are set already
+        rng = np.random.default_rng(4000)
+        X0 = 0.4
+        lhc.initialise_LHC(Y_dim,m,X0=X0,rng=rng)
+        params = lhc.flatten_params()
+        lhc.unflatten_params(params[:2*m+1])
+        lhc_P = lhc.build_P_params(rng=rng)
+        params_actual = [lhc.kappa, lhc.theta,lhc.gamma1,lhc.lambda_i,lhc.sigma, lhc.sigma_err]
+
+        # Set initial values as in kalman filter.
+        mu1 = lhc.solve_mu1(lhc.kappa,lhc.theta,lhc.gamma1,lhc.lambda_i)
+        chi0 = lhc.compute_stationary(lhc.kappa,lhc.theta,lhc.m,lhc.gamma1,mu1,lhc.lambda_i) # np.array([1] + [X0]*m)
+        chi0 = np.append([1],chi0)
+
+        T,M = 10, 1000
+        mat_grid = np.array([1,3,5,7,10]) # Typical maturity grid
+
+        n_mat = mat_grid.shape[0]
+        # Set initial values to be mu.
+        # Use the Euler scheme as estimation is happening under too. 
+        T_path, chi_Q = lhc.simul_latent_states(chi0=chi0,T=T,M=M,n_mat=n_mat,seed=4000,scheme='Milstein',
+                                                measure='P')
+
+
+        # Holld maturity to be 5
+        t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + T_path[None, :])   # shape (len(T_M_grid), len(t_obs))
+
+        t0 = T_path
+
+        lhc_numba = rebuild_lhc_struct(lhc.kappa, lhc.theta, lhc.gamma1[0],
+                                    lhc.r, lhc.Y_dim, lhc.delta, lhc.tenor)
+
+
+        # Draw noise vector:
+        R = norm.rvs(size = (t_mat_grid.shape[0]*t_mat_grid.shape[1]),scale = lhc.sigma_err).reshape(t_mat_grid.shape) # simulate at beginning - faster!
+        CDS_simul_actual = get_CDS_Model(T_path, t0, t_mat_grid, chi_Q.T, lhc_numba) + R
+        # One could try without noise!
+
+
+        ### Run one kalman filter to see identification...
+        # lhc_kalman_params,  Xn,Zn, Pn, se,ll= lhc.run_n_kalmans(T_path, t_mat_grid, CDS_simul_actual.T,base_seed=2000,n_restarts=1)
+        # Read in the fitted kalman filter instead
+        files_loc = f"./Simulation_studies/lhc_parameter_comparison_Xdim{X_dim}_wgamma1.xlsx"
+        df = pd.read_excel(files_loc)
+        lhc_kalman_params = np.array(df['Estimated Kalman'])
+        test  = np.array(df['True'])
+        # lhc_kalman_params =np.concatenate([lhc_kalman_params[:2*m], lhc.gamma1, lhc_kalman_params[2*m:]])
+        # same for se - Not directly clear.
+        # se =np.concatenate([se[:2*m],np.array([0]), se[2*m:]])
+        # print(lhc_kalman_params)
+        # =================== PARAM SETUP =================== #
+
+        true_params = {
+            "kappa": np.array(params_actual[0]).flatten(),      # length m
+            "theta": np.array(params_actual[1]).flatten(),
+            "gamma1": np.array(params_actual[2]).flatten(),     # stays length 1
+            "lambda_i": np.array(params_actual[3]).flatten(),
+            "sigma": np.array(params_actual[4]).flatten(),
+            "sigma_err": np.array(params_actual[5]).flatten()   # stays scalar or len1
+        }
+
+        kalman_params = {
+            "kappa": np.array(lhc_kalman_params[0:m]),
+            "theta": np.array(lhc_kalman_params[m:2*m]),
+            "gamma1": np.array([lhc_kalman_params[2*m]]),
+            "lambda_i": np.array(lhc_kalman_params[2*m+1:3*m+1]),
+            "sigma": np.array(lhc_kalman_params[3*m+1:4*m+1]),
+            "sigma_err": np.array([lhc_kalman_params[-1]])
+        }
+
+        # Spread (relative or absolute)
+        grid_spread = {
+            "kappa": 0.05,
+            "theta": 0.05,
+            "gamma1": 0.05,
+            "lambda_i": 0.1,
+            "sigma": 0.05,
+            "sigma_err": 0.05
+        }
+
+        n_points = 15
+        results = []
+
+        # =================== GRID FUNCTION =================== #
+        def build_grid(center_params, label):
+            grids = {}
+
+            for key, val in center_params.items():
+                v = np.asarray(val)
+
+                spread = grid_spread[key]
+
+                # if key == "lambda_i":
+                #     up_b = (center_params["kappa"] - center_params["kappa"] * center_params["theta"] -
+                #             center_params["gamma1"])
+                #     low_b = (-center_params["kappa"] * center_params["theta"])
+                #     g = np.zeros((n_points,dim))
+                #     for i in range(dim):
+                #         g[:,i] = np.linspace(low_b[i], up_b[i], n_points)
+                # elif key == "theta":
+                #     lower = np.maximum(np.array([1e-6*X_dim]), v * (1 - spread))
+                #     upper = 1 - center_params["gamma1"] / center_params["kappa"]
+                #     dim = max(lower.shape[0],upper.shape[0])
+                #     g = np.zeros((n_points,dim))
+                #     for i in range(dim):
+                #         g[:,i] = np.linspace(lower[i], upper[i], n_points)
+                # elif key == "gamma1":
+                #     lower = max(1e-6, v * (1 - spread))
+                #     upper = center_params["kappa"] - center_params["kappa"] * center_params["theta"]
+                #     dim = upper.shape[0]
+                #     g = np.linspace(lower,  np.min(upper), n_points)
+                # elif key == "kappa":
+                #     lower = center_params["gamma1"] / (1 - center_params["theta"])
+                #     upper = v * (1 + spread)
+                #     dim = max(lower.shape[0],upper.shape[0])
+                #     g = np.zeros((n_points,dim))
+                #     for i in range(dim):
+                #         g[:,i] = np.linspace(lower[i], upper[i], n_points)
+
+                # elif key == "sigma":
+                #     sigma_constr = np.sqrt(-2*(center_params["gamma1"]  -  center_params["kappa"] +  center_params["kappa"] *  center_params["theta"] ))
+                #     sigma_thetakap = np.sqrt(2 * center_params["kappa"] * center_params["theta"])
+                #     upper = np.minimum(sigma_constr,sigma_thetakap)
+                #     dim = max(lower.shape[0],upper.shape[0])
+                #     g = np.zeros((n_points,dim))
+                #     for i in range(dim):
+                #         g[:,i] = np.linspace(0.05, upper[i], n_points)
+                # else:
+                #     lower = max(1e-6, v * (1 - spread))
+                #     upper = v * (1 + spread)
+                #     g = np.linspace(lower, upper, n_points)
+
+                if key == 'lambda_i':
+                    lower = v - spread
+                    max_bound = np.minimum( grid_spread['kappa'] -0.001,val + spread)
+                    upper =max_bound
+                else:
+                    lower = v * (1 - spread)
+                    upper = v * (1 + spread)
+                dim = max(lower.shape[0],upper.shape[0])
+                g = np.zeros((n_points,dim))
+                for i in range(dim):
+                    g[:,i] = np.linspace(lower[i], upper[i], n_points)
+                
+                g = np.linspace(lower, upper, n_points)
+
+                
+                grids[key] = g
+                
+
+               
+            print(f"\n✅ Built grid for {label}:")
+            for k, v in grids.items():
+                print(f"{k}: {np.round(v, 4)}")
+
+            return grids
+
+
+
+        # =================== LIKELIHOOD LOOP =================== #
+
+        for center_label, center_params in [("true", true_params), ("kalman", kalman_params)]:
+        # for center_label, center_params in [("true", true_params)]:
+
+            grids = build_grid(center_params, center_label)
+
+            for pname, grid_values in grids.items():
+                print(f"--- Scanning {pname} around {center_label} center ---")
+                
+                # Loop over number of params
+                for index in range(grid_values[0,:].shape[0]):
+                # extract base parameter name and (optional) index
+                    if grid_values[0,:].shape[0]>1:
+                        base, idx = pname, index
+                    else:
+                        base, idx = pname, 0
+
+                    for value in grid_values[:,index]:
+
+                        pvals = copy.deepcopy(center_params)
+
+                        if grid_values[0,:].shape[0] == 0:   # scalar
+                            pvals[base][idx] = np.array([value])
+                        else:             # vector --> update specific component
+                            pvals[base][idx] = value
+
+                        # unpack
+                        kappa     = np.array(pvals["kappa"]).flatten()
+                        theta     = np.array(pvals["theta"]).flatten()
+                        gamma1    = np.array(pvals["gamma1"]).flatten()
+                        lambda_i  = np.array(pvals["lambda_i"]).flatten()
+                        sigma     = np.array(pvals["sigma"]).flatten()
+                        sigma_err = np.array(pvals["sigma_err"]).flatten()
+
+                        # params_vec = np.concatenate([kappa, theta, gamma1, lambda_i, sigma, sigma_err])
+                        params_vec = np.concatenate([kappa, theta, gamma1, lambda_i, sigma, sigma_err])
+
+                        # constraint check
+                        constr = nonlinear_constraints(params_vec, m)
+                        if np.any(constr < 0):
+                            neg_log_like = np.nan
+                        else:
+                            # t_obs[::5],  T_M_grid[:,::5], CDS_obs[::5,:]
+                            # neg_log_like = kalman_wrapper(
+                            #     params_vec, T_path, T_path, t_mat_grid,
+                            #     CDS_simul_actual.T,
+                            #     X0=lhc.X0, m=lhc.m, r=lhc.r,
+                            #     Y_dim=lhc.Y_dim, delta=lhc.delta, tenor=lhc.tenor
+                            # )
+                            neg_log_like = kalman_wrapper(
+                                params_vec, T_path, T_path, t_mat_grid,
+                                CDS_simul_actual.T,
+                                X0=lhc.X0, m=lhc.m, r=lhc.r,
+                                Y_dim=lhc.Y_dim, delta=lhc.delta, tenor=lhc.tenor
+                            )
+
+                        results.append({
+                            "center": center_label,
+                            "parameter": pname,
+                            "idx": idx,
+                            "value": value,
+                            "neg_log_like": neg_log_like
+                        })
+
+
+        # =================== SAVE + PLOT =================== #
+
+        results_df = pd.DataFrame(results)
+        results_df.to_csv(f"./Likelihoods/likelihood_surface_scan_dual_X{X_dim}_wgamma1.csv", index=False)
+        sns.set(style="whitegrid", font_scale=1.2)
+
+        # get all unique (param, idx) pairs
+        param_idx_pairs = []
+        for pname in sorted(results_df["parameter"].unique()):
+            idxs = sorted(results_df.loc[results_df["parameter"]==pname, "idx"].unique())
+            for idx in idxs:
+                param_idx_pairs.append((pname, idx))
+
+        n_params = len(param_idx_pairs)
+        n_cols = 4
+        n_rows = math.ceil(n_params / n_cols)
+
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4*n_rows))
+        axes = axes.flatten()
+
+        for ax, (pname, idx) in zip(axes, param_idx_pairs):
+            for center_label, color in zip(["true",'kalman'], ["blue","orange"]):
+                subset = results_df[(results_df["parameter"] == pname) &
+                                    (results_df["idx"] == idx) &
+                                    (results_df["center"] == center_label)].copy()
+                if subset.empty:
+                    continue
+                subset = subset.sort_values("value").dropna()
+                sns.lineplot(data=subset, x="value", y="neg_log_like",
+                            ax=ax, lw=2, label=f"{center_label}[{idx}]")
+
+            # vertical line for true value
+            ax.axvline(true_params[pname][idx], color="blue", linestyle="--", lw=1.5)
+            ax.axvline(kalman_params[pname][idx], color="orange", linestyle="--", lw=1.5)
+
+            ax.set_title(f"Likelihood profile: {pname}_{idx}")
+            ax.set_xlabel(f"{pname}_{idx}")
+            ax.set_ylabel("Neg log-likelihood")
+            ax.grid(True, alpha=0.3)
+
+        # hide unused axes
+        for j in range(len(param_idx_pairs), len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.savefig(f"./Likelihoods/Likelihoods_dual_X{X_dim}_wgamma1.png", dpi=150)
+        plt.close()
+
+    test = 1
+
 
     test = 1

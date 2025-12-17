@@ -1,6 +1,10 @@
 import pandas as pd
 import os
 import numpy as np
+from Models.LHCModels.LHC_wGamma1 import LHC_single as LHC_wGamma1
+from Models.LHCModels.LHC_single import LHC_single as LHC_single
+from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity as CIR
+
 
 # --- Configuration ---
 # Map the filenames to the column groups in the table (1, 2, 3)
@@ -19,7 +23,7 @@ files_map_cir = {
     3: "./Simulation_studies/cir_parameter_comparison_Xdim3.xlsx" # Placeholder name
 }
 # --- Configuration Part 2 (New) ---
-FIRMS = ['CMZB', 'DANBNK', 'MONTE', 'SVSKHB']
+FIRMS = [ 'DANBNK', 'MONTE']
 BASE_PATH = r"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results"
 
 # Define the order of parameters for the Firm tables
@@ -98,9 +102,9 @@ def format_val(val):
         v = float(val)
 
         # Use scientific notation if extremely small
-        if abs(v) < 1e-4:
-            return f"{v:.2e}"   # scientific format
-        
+        if abs(v) < 5e-4:
+            return f"{v:.2e}"
+    
         return f"{v:.3f}"
     
     except:
@@ -212,7 +216,7 @@ def generate_latex_lhc():
 
 #### Cascading logic.
 
-def generate_latex_afc():
+def generate_latex_afc(files_map):
     dfs = load_data(files_map_cir)
     
     print(r"\begin{table}[H]")
@@ -419,8 +423,12 @@ def generate_firm_tables():
             # Load LHCC Kalman
             d = np.load(fp_lhc_kal)
             data_pack['lhcc_kal'] = d['final_param'].flatten()
-            # Update params in lhcc. Apparently lambda is last (my bad)s
+            # Update params in lhcc. 
             data_pack['lhcc_se'] = d['SE'].flatten()
+            # Overwrite SE to remove SE on gamma1 in outour.
+            se = np.array(d['SE'].flatten())
+            data_pack['lhcc_se'] = np.concatenate([se[:2*m],np.array([0]), se[2*m:]])
+
             data_pack['lhcc_ll'] = d['LL'] if 'LL' in d else d.get('log_likeli', None)
 
             # Load AFC Kalman
@@ -520,7 +528,251 @@ def generate_firm_tables():
         print(r"\end{table}")
         print("\n\n")
 
+### Function to compare fixing gamma1 relationship and having gamma1 free.
+def generate_firm_tables_appendix():
+    
+    for firm in ['DANBNK','MONTE']:
+        # Pre-load data for this firm for all dimensions to avoid opening files inside the row loop
+        # Structure: firm_data[m] = { 'lhcc_fil': ..., 'lhcc_kal': ..., 'lhcc_se': ..., 'afc_kal': ..., 'afc_se': ..., 'll': ... }
+        firm_data = {}
+        
+        firm_dir = BASE_PATH + "/" + firm
+        
+        for m in range(1, 4):
+            data_pack = {'exists': False}
+            
+            # Construct Filepaths
+            # NOTE: Logic adjusted based on user description.
+            # 2. LHCC Kalman (Has SE)
+            fp_lhc_kal = firm_dir  + "/" +  f"Kalman_resultsLHC_NX{m}.npz"
+            fp_lhc_kal_gamma1 = firm_dir  + "/" +  f"Kalman_resultsLHC_NX{m}_gamma1.npz"
+            
+            # Load LHCC Kalman
+            d = np.load(fp_lhc_kal)
+            data_pack['lhcc_kal'] = d['final_param'].flatten()
+
+            # Overwrite SE to remove SE on gamma1 in outour.
+            se = np.array(d['SE'].flatten())
+            data_pack['lhcc_se'] = np.concatenate([se[:2*m],np.array([0]), se[2*m:]])
+
+            data_pack['lhcc_ll'] = d['LL'] if 'LL' in d else d.get('log_likeli', None)
+
+            d = np.load(fp_lhc_kal_gamma1)
+            data_pack['lhcc_kal_gamma1'] = d['final_param'].flatten()
+            # Overwrite SE to remove SE on gamma1 in outour.
+            se = np.array(d['SE'].flatten())
+            data_pack['lhcc_se_gamma1'] = se
+
+            data_pack['lhcc_ll_gamma1'] = d['LL'] if 'LL' in d else d.get('log_likeli', None)
+
+
+            data_pack['exists'] = True
+            
+            firm_data[m] = data_pack
+
+        # --- Start Printing LaTeX Table ---
+        print(r"\begin{table}[H]")
+        print(r"    \centering")
+        print(r"    \resizebox{\textwidth}{!}{") # Optional: Resize to fit if too wide
+        print(r"    \begin{tabular}{|c|cc|cc|cc|}")
+        print(r"        \hline")
+        print(rf"        & \multicolumn{{2}}{{c|}}{{\textbf{{$m=1$}}}} & \multicolumn{{2}}{{c|}}{{\textbf{{$m=2$}}}} & \multicolumn{{2}}{{c|}}{{\textbf{{$m=3$}}}} \\")
+        print(r"        \cline{2-7}")
+        print(r"        Parameter & Kalman & Kalman w. $\gamma_1$ & Kalman & Kalman w. $\gamma_1$ & Kalman & Kalman w. $\gamma_1$ \\")
+        print(r"        \hline")
+
+        # Loop through Parameters
+        for param_key, latex_label in ROW_ORDER_FIRMS:
+            row_cells = []
+            
+            for m in range(1, 4):
+                d = firm_data.get(m, {})
+
+                # 2. LHCC Kalman (Value + SE)
+                val_kal = get_param_value(param_key, d.get('lhcc_kal'), m,model='lhc')
+                se_kal = get_param_value(param_key, d.get('lhcc_se'), m,model='lhc')
+                
+                str_kal = format_val(val_kal)
+                str_se_kal = format_val(se_kal)
+                
+                if str_kal != "-":
+                    str_kal = r"\makecell{" + str_kal + r"\\[-6pt] \small{(" + str_se_kal + r")}}"
+                else:
+                    str_kal = "-"
+
+
+                # 2. LHCC Kalman (Value + SE)
+                val_kal_gamma1 = get_param_value(param_key, d.get('lhcc_kal_gamma1'), m,model='lhc')
+                se_kal_gamma1 = get_param_value(param_key, d.get('lhcc_se_gamma1'), m,model='lhc')
+                
+                str_kal_gamma1 = format_val(val_kal_gamma1)
+                str_se_kal_gamma1 = format_val(se_kal_gamma1)
+                
+                if str_kal_gamma1 != "-":
+                    str_kal_gamma1 = r"\makecell{" + str_kal_gamma1 + r"\\[-6pt] \small{(" + str_se_kal_gamma1 + r")}}"
+                else:
+                    str_kal_gamma1 = "-"
+
+                row_cells.extend([str_kal,str_kal_gamma1])
+
+            print(f"        {latex_label} & {' & '.join(row_cells)} \\\\")
+
+        print(r"        \hline")
+        
+        # Log Likelihood Row
+        ll_cells = []
+        for m in range(1, 4):
+            d = firm_data.get(m, {})
+            
+            # LHCC Kal LL
+            val_ll_lhc = d.get('lhcc_ll')
+            # Extract single value if it's an array
+            if isinstance(val_ll_lhc, (np.ndarray, list)): val_ll_lhc = val_ll_lhc.flat[0]
+            str_ll_lhc = format_val(val_ll_lhc)
+                        # LHCC Kal LL
+
+            val_ll_lhc_gamma1 = d.get('lhcc_ll_gamma1')
+            # Extract single value if it's an array
+            if isinstance(val_ll_lhc, (np.ndarray, list)): val_ll_lhc_gamma1 = val_ll_lhc_gamma1.flat[0]
+            str_ll_lhc_gamma1 = format_val(val_ll_lhc_gamma1)
+
+            ll_cells.extend([str_ll_lhc, str_ll_lhc_gamma1])
+
+        print(f"        $\\log \\mathcal{{L}}$ & {' & '.join(ll_cells)} \\\\")
+
+        print(r"        \hline")
+        print(r"    \end{tabular}}") # End resizebox
+        print(f"    \\caption{{Parameter Estimation Results for {firm}}}")
+        print(f"    \\label{{tab:results_app_{firm}}}")
+        print(r"\end{table}")
+        print("\n\n")
+
+
+
+    #### Function for creating summary table with average, mean min and max CDS spread.
+
+def cds_stats_latex_by_firm(df):
+    rows = []
+    df = df.pivot(index = ['Date','Ticker'],
+                                 columns='Tenor',values = 'Par Spread').reset_index()
+    df  = df[df['Ticker'].isin(['DANBNK','MONTE'])]
+    frames = []
+
+    for firm, df_sub in df.groupby('Ticker'):
+
+        df_t = df_sub[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']].ffill().bfill()
+
+        stats = pd.DataFrame(
+            [
+                df_t.mean(),
+                df_t.std(),
+                df_t.median(),
+                df_t.min(),
+                df_t.max()
+            ],
+            index=["Mean", "Std", "Median", "Min", "Max"]
+        ) * 10000
+
+        stats.index = pd.MultiIndex.from_product(
+            [[firm], stats.index],
+            names=["Firm", "Statistic"]
+        )
+
+        frames.append(stats)
+
+    out = pd.concat(frames)
+    mon_obs = df[df['Ticker'].isin(['MONTE'])].shape[0]* df[df['Ticker'].isin(['MONTE'])].shape[1]
+    dan_obs = df[df['Ticker'].isin(['DANBNK'])].shape[0]* df[df['Ticker'].isin(['DANBNK'])].shape[1]
+    latex = out.to_latex(
+        float_format="%.2f",
+        multirow=True,
+        caption=f"CDS Spread statistics (bps).  DANBNK {dan_obs} obs. MONTE {mon_obs} obs.",
+        label="tab:cds_stats"
+    )
+    print(latex)
+
+def gamma_mkt_table():
+    global_path = './Gamma_Calibration'
+    firms = ['DANBNK', 'MONTE']
+    tenors = ['1Y', '2Y', '3Y', '4Y', '5Y', '7Y', '10Y']
+
+    gamma_mkt_dict = {}
+
+    for firm in firms:
+        data_p = f"{global_path}/{firm}/Data_{firm}.npz"
+        
+        data = np.load(data_p)
+        gamma_mkt = data['gamma_hist']
+        
+        # first date, all maturities
+        gamma_mkt_dict[firm] = gamma_mkt[0, :]
+
+    # Firms as rows, tenors as columns
+    out = pd.DataFrame.from_dict(
+        gamma_mkt_dict,
+        orient='index',
+        columns=tenors
+    )
+
+    latex = out.to_latex(
+        float_format="%.4f",
+        caption=r"$\gamma^{mkt}$ on January 1st 2019",
+        label="tab:gamma_mkt"
+    )
+
+    print(latex)
+
+# def cdso_table():
+
+
+# def digital_table():
+
+def lookback_table():
+    df = pd.DataFrame(
+        index=["DANBNK", "MONTE"]
+    )
+    for x_dim in [1,2,3]:
+        look_MC = []
+        look_MC_cir = []
+        look_MC_g = []
+        for firm in ['DANBNK','MONTE']:
+            # Read in data.
+            
+            directory = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}"
+            filepath = os.path.join(directory, f"Option_data_{firm}_X{x_dim}.npz")
+            option_data = np.load(filepath)
+            if firm == 'MONTE':
+                monte_spot = round(option_data['cds_obs']*10000,3)
+            elif firm == 'DANBNK':
+                danbnk_spot = round(option_data['cds_obs']*10000,3)
+            look_MC.append(round(option_data['look_MC_lhc']*10000,3))
+            look_MC_cir.append(round(option_data['look_MC_cir']*10000,3)   )
+            filepath = os.path.join(directory, f"Option_data_{firm}_X{x_dim}_full.npz")
+            option_data_full = np.load(filepath)
+            look_MC_g.append(round(option_data_full['look_MC_lhc']*10000,3))
+            # Append to list.
+        df[f"$LHCC({x_dim})$"] = look_MC 
+        df[r"$LHCC_{\gamma}"+f"({x_dim})$"] = look_MC_g 
+        df[f"$AFC({x_dim})$"] = look_MC_cir 
+            
+    latex = df.to_latex(
+    column_format="c|ccc|ccc|ccc",
+    float_format="%.2f",
+    escape=False,
+    caption="Lookback Call Option Prices in Basis Points",
+    label="tab:lookback",
+    )
+
+    print(latex)
+    print("\n")
+    print(f'DANBNK spot: {danbnk_spot}, MONTE spot: {monte_spot}')
+
+
+
 if __name__ == "__main__":
+    print(f'Market calibration gamma')
+    gamma_mkt_table()
+    print("\n")
     print("% --- Simulation Tables ---")
     generate_latex_lhc()
     print("\n")
@@ -529,5 +781,25 @@ if __name__ == "__main__":
     print("\n% --- Empirical Firm Tables ---")
     generate_firm_tables()
 
+    print("\n% --- Empirical Firm Tables with gamma1 ---")
+    generate_firm_tables_appendix()
+
+
+    # New simulation results:
+    files_map = {
+    1: "./Simulation_studies/lhc_parameter_comparison_Xdim1_wgamma1.xlsx",
+    2: "./Simulation_studies/lhc_parameter_comparison_Xdim2_wgamma1.xlsx",
+    3: "./Simulation_studies/lhc_parameter_comparison_Xdim3_wgamma1.xlsx" # Placeholder name
+    }
+    generate_latex_lhc()
+    data = pd.read_excel("./Data/subset_data.xlsx")
+    cds_stats_latex_by_firm(data)
+
+
+    ### OPTION TABLES:
+    # Call option table excluding 
+
+    # Lookback
+    lookback_table()
 
 test = 1

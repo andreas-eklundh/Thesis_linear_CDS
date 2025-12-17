@@ -179,10 +179,6 @@ def cals_cds_several(X,params, t, t_mat_grid,t0=None):
 
 
 #### Fir cascading.
-
-# ============================================================
-# 1. NUMBA-FRIENDLY LINEAR INTERPOLATOR
-# ============================================================
 @njit
 def lin_interp(x, xp, fp):
     n = len(xp)
@@ -247,9 +243,6 @@ def deriv_from_grid(tau_vec, lam, tau_grid, alpha_x_grid, beta_x_grid):
     return out
 
 
-# ============================================================
-# 3. NUMBA-PROTECTION LEG
-# ============================================================
 @njit
 def calc_prot_numba(t, t0, t_mat, lam,
                     tau_grid, alpha_grid, beta_grid,
@@ -281,9 +274,6 @@ def calc_prot_numba(t, t0, t_mat, lam,
     return (1.0 - delta) * total
 
 
-# ============================================================
-# 4. NUMBA-COUPON LEG
-# ============================================================
 @njit
 def calc_coupon_numba(t, t0, t_mat, lam,
                       tau_grid, alpha_grid, beta_grid,
@@ -313,9 +303,6 @@ def calc_coupon_numba(t, t0, t_mat, lam,
     return total
 
 
-# ============================================================
-# 5. NUMBA-ACCRUAL LEG
-# ============================================================
 @njit
 def calc_accrual_numba(t, t0, t_mat, lam,
                        tau_grid, alpha_grid, beta_grid,
@@ -357,9 +344,6 @@ def calc_accrual_numba(t, t0, t_mat, lam,
     return total
 
 
-# ============================================================
-# 6. NUMBA-CDS PRICE
-# ============================================================
 @njit
 def calc_CDS_numba(t, t0, t_mat, lam,
                    tau_grid, alpha_grid, beta_grid,
