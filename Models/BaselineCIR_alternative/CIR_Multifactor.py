@@ -825,18 +825,10 @@ class CIRIntensity():
             
             # Get model implies CDS.
             CDS_sim = np.zeros(Lambda.shape)
-            CDS_sim_2 = np.zeros(Lambda.shape)
             for n in range(CDS_sim.shape[0]):
-                start=time.time()
-                CDS_sim[n] = self.calc_CDS_fast(params, T_return[n],t0, t_M, X_t[n,:],
-                                                 interp_struct)
-                nd=time.time()
-                print(f'{nd-start}')
-                start=time.time()
-                CDS_sim_2[n]  = self.calc_CDS_fast_numba(T_return[n],t0, t_M, X_t[n,:],
+                CDS_sim[n]  = self.calc_CDS_fast_numba(T_return[n],t0, t_M, X_t[n,:],
                                                 interp_struct)
-                nd=time.time()
-                print(f'{nd-start}')
+
 
                 # Break loop if default happens at date
                 if default_event[n]:
