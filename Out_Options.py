@@ -26,7 +26,7 @@ if __name__ == "__main__":
     import os
     from Models.Utils import global_fit_measures
     from Models.LHCModels.LHC_single import LHC_single
-    from Models.BaselineCIR_alternative.CIR_numba import calc_cds
+    
     from Models.LHCModels.LHC_single import cds_fun
     from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity
     import matplotlib.pyplot as plt
@@ -50,7 +50,7 @@ if __name__ == "__main__":
         # Forwrard fill again. Back fill in case any initial missing
         CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
 
-        directory = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}"
+        directory = f"./Results/{firm}"
         for i in X_dims:
             filepath = os.path.join(directory, f"Kalman_resultsLHC_NX{i}.npz")
             data = np.load(filepath)
@@ -256,7 +256,7 @@ if __name__ == "__main__":
             cdso_MC_hist_bps_cir = cdso_MC_hist_cir * 1e4
             # cdso_MC_bps_cir_fourier = cdso_fourier * 1e4
         
-            save_path = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Chapter7/Options"
+            save_path = f"./Results/Chapter7/Options"
 
         #     save_path = directory + f"/Options"
             
@@ -485,7 +485,7 @@ if __name__ == "__main__":
         # Forwrard fill again. Back fill in case any initial missing
         CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']].ffill().bfill())
 
-        directory = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}"
+        directory = f"./Results/{firm}"
         for i in X_dims:
             filepath = os.path.join(directory, f"Kalman_resultsLHC_NX{i}_gamma1.npz")
             data = np.load(filepath)
@@ -595,7 +595,7 @@ if __name__ == "__main__":
             # cdso_MC_hist_bps_cir = cdso_MC_hist_cir * 1e4
             # cdso_MC_bps_cir_fourier = cdso_fourier * 1e4
 
-            save_path = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/Options_full"
+            save_path = f"./Results/Options_full"
 
         #     save_path = directory + f"/Options"
             

@@ -73,7 +73,7 @@ if __name__ == '__main__':
     default_intensity = lhc.default_intensity(Xn_kalman.T,Yn_kalman)
     #mpr,girsanov = lhc.get_MPR(optim_params,Xn[:,0],Xn[:,1:].T,CDS_obs)
 
-    np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/DANBNK/Kalman_resultsLHC.npz",
+    np.savez("./Results/DANBNK/Kalman_resultsLHC.npz",
             final_param=optim_params,
             Xn=Xn_kalman,
             Yn=Yn_kalman,
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     #         MPR = mpr)
 
 
-    data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/DANBNK/kalman_resultsLHC.npz")
+    data = np.load("./Results/DANBNK/kalman_resultsLHC.npz")
     optim_params = data["final_param"]
     Xn = data["Xn"]
     Yn=data["Yn"]

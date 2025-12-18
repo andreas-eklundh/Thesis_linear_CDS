@@ -1146,6 +1146,114 @@ def nonlinear_constraints( params, m):
     return cons
 
 
+# @njit
+def nonlinear_constraints_mpr( params, m):
+    m = int(m)
+    # expected number of constraints: g1, g2 and 2*m for g3,g4 converted -> total 2 + 2*m
+    params_p = np.asarray(params, dtype=float)
+
+    # params_p = params[2*m+1:]
+    # params_q = params[:2*m+1]
+    params_p = params[2*m:]
+    params_q = params[:2*m]
+    # Build constraints: all should be >= 0
+    cons = []
+
+    lambda_i,sigma,sigma_err = params_p[:m],params_p[m:2*m],params_p[-1]
+    # kappa, theta, gamma1 = params_q[:m],params_q[m:2*m], params_q[-1]
+    kappa, theta = params_q[:m],params_q[m:2*m]
+    gamma1 = calc_gamma1(kappa,theta)
+    kappa_p = kappa - lambda_i
+    theta_p = (kappa*theta) / kappa_p
+    # theta_p[-1] = theta_p[-1] + lambda_i[-1] / kappa_p[-1]
+    # theta_p = theta_p + lambda_i / kappa_p
+
+    # ensure arrays
+    sigma = np.asarray(sigma)
+
+    # Constraints on lambda. 'Mean reversion needs to be positive'.
+    # g1 =  lambda_i[-1] + kappa[-1]*theta[-1]
+    # cons.append(np.asarray(g1).flatten())
+    # g1 =  lambda_i[-1] + kappa[-1]*theta[-1]
+    # cons.append(np.asarray(g1).flatten())
+
+    # Upper bound
+    g1 = kappa - lambda_i
+    cons.append(g1)
+
+
+    ### Note, the constraints on theta_p and kappa_p still needs to hold...
+    # Drift away from zero...
+    g1 = theta[-1] * kappa[-1] # - 0.5 * (sigma[-1]**2)
+    cons.append(np.asarray(g1).flatten())
+
+    g1 = theta_p[-1] * kappa_p[-1] # - 0.5 * (sigma[-1]**2)
+    cons.append(np.asarray(g1).flatten())
+
+
+    # Drift away from 1. not needed for final
+    # Constraint for process m with Y_t
+    # if m == 1:
+    #     g3 = gamma1 - kappa + kappa * theta 
+    #     cons.append(-np.asarray(g3).flatten())
+    #     g3 = gamma1 - (kappa_p) + (kappa_p * theta_p) 
+    #     cons.append(-np.asarray(g3).flatten())
+    # else:
+    #     g3 = gamma1 - kappa[:-1] + kappa[:-1] * theta[:-1] + 0.5 * (sigma[:-1] ** 2)
+    #     cons.append(-g3)
+    #     g3 = gamma1 - (kappa_p[:-1]) + (kappa_p[:-1] * theta_p[:-1]) + 0.5 * (sigma[:-1]**2)
+    #     cons.append(-g3)
+
+    g3 = gamma1 - kappa + kappa * theta #+ 0.5 * (sigma ** 2)
+    cons.append(-g3)
+    g3 = gamma1 - (kappa_p) + (kappa_p * theta_p) 
+    cons.append(-g3)
+
+
+    ## All the above are direct artifacts from the model. Still too much flexibility. Choose gamma1
+    # s.t. smaller than all thetas.
+    # Other constraint in init: that is only for bookkeeping in multivar. Accounted for here
+    # in the sigma constraints.
+
+    # Make a theta assumption.
+    # for i in range(m):
+    #     if i == m-1:
+    #         g6 = theta[i] - 1e-4
+    #     else:
+    #         g6 = theta[i] - theta[i+1] + 1e-4
+    #     cons.append(np.asarray(g6).flatten())
+
+    # Gamma constraint.
+    # kappa_bound = kappa[0] / (1+kappa[0])
+    # kappas = np.min(kappa)
+    # g6 = np.minimum(kappa_bound,kappas) - gamma1 # Upper cound on gamma1
+    # cons.append(np.asarray(g6).flatten())
+    # Assuming increasing gamma.
+    # for i in range(m):
+    #     if i == m-1:
+    #         g6 = kappa[i] - 1e-4
+    #     else:
+    #         g6 = kappa[i] - kappa[i+1] + 1e-4
+    #     cons.append(np.asarray(g6).flatten())
+
+    # stationary_lambda = 0.05 / 100
+    # X_dim = kappa.shape[0]
+    # if X_dim > 1:
+    #     mu = compute_stationary(kappa, theta, 
+    #                                         X_dim, gamma1=1, mu1=stationary_lambda, lambda_i=None)
+    #     upper_lim_theta_1 =np.minimum(1/2 * mu[1]**(-1),1/2) # always second entrance
+    # else: 
+    upper_lim_theta_1 = 1 / 2
+    g5 = upper_lim_theta_1 - theta[0]
+    cons.append(np.asarray(g5).flatten())
+
+
+    cons = np.concatenate(cons, dtype=float)
+
+    return cons
+
+
+
 
 def equality_constraints( params, m):
     """
@@ -1689,29 +1797,53 @@ class LHC_single():
 
     # One kalman filter for optimizing and one for outputting.
 
-    def get_kalman_params(self, t_obs, T_M_grid, CDS_obs, x0,base_seed):
+    def get_kalman_params(self, t_obs, T_M_grid, CDS_obs, x0,base_seed,MPR):
         m = self.m
         t0 = t_obs
-        if self.m == 1:
-            bounds = (
-                [(1e-6, 2)] * m +     # kappa
-                [(1e-6,1)] * m +     # eta=theta*gamma1. Same bounds. Restriction justified here
-                [(0.0001,1)] +        # gamma1
-                [(-0.6, 0.6)] * m  +         # lambda_p restrict it
-                [(1e-6, 1.5)] * m +     # sigma
-                [(1e-6, 0.01)]         # sigma_err. Unrealistic measure noise is more than 50 Bps
-            )
-        else:
-            bounds = (
-                [(1e-6, 2)] * m +     # kappa. Set to 1
-                [(1e-6, 1)]  +     # eta=theta*gamma1. Same bounds.
-                [(1e-6, 1)] * (m-1) +     # eta=theta*gamma1. Same bounds.
-                [(0.0001,1)] +        # gamma1
-                [(-0.6, 0.6)] * m  +         # lambda_p restrict it
-                [(1e-6, 1.5)] * m +     # sigma
-                [(1e-5, 0.01)]         # sigma_err - very small
-            )   
-        nlc = NonlinearConstraint(lambda x: nonlinear_constraints(x,self.m), 0, np.inf)
+        if MPR:
+            if self.m == 1:
+                bounds = (
+                    [(1e-6, 2)] * m +     # kappa
+                    [(1e-6,1)] * m +     # eta=theta*gamma1. Same bounds. Restriction justified here
+                    [(0.0001,1)] +        # gamma1
+                    [(-0.6, 0.6)] * m  +         # lambda_p restrict it
+                    [(1e-6, 1.5)] * m +     # sigma
+                    [(1e-6, 0.01)]         # sigma_err. Unrealistic measure noise is more than 50 Bps
+                )
+            else:
+                bounds = (
+                    [(1e-6, 2)] * m +     # kappa. Set to 1
+                    [(1e-6, 1)]  +     # eta=theta*gamma1. Same bounds.
+                    [(1e-6, 1)] * (m-1) +     # eta=theta*gamma1. Same bounds.
+                    [(0.0001,1)] +        # gamma1
+                    [(-0.6, 0.6)] * m  +         # lambda_p restrict it
+                    [(1e-6, 1.5)] * m +     # sigma
+                    [(1e-5, 0.01)]         # sigma_err - very small
+                )   
+            nlc = NonlinearConstraint(lambda x: nonlinear_constraints(x,self.m), 0, np.inf)
+
+        elif MPR == False:
+            if self.m == 1:
+                bounds = (
+                    [(1e-6, 2)] * m +     # kappa
+                    [(1e-6,1)] * m +     # eta=theta*gamma1. Same bounds. Restriction justified here
+                    [(0.0001,1)] +        # gamma1
+                    [(-0, 0)] * m  +         # lambda_p restrict it
+                    [(1e-6, 1.5)] * m +     # sigma
+                    [(1e-6, 0.01)]         # sigma_err. Unrealistic measure noise is more than 50 Bps
+                )
+            else:
+                bounds = (
+                    [(1e-6, 2)] * m +     # kappa. Set to 1
+                    [(1e-6, 1)]  +     # eta=theta*gamma1. Same bounds.
+                    [(1e-6, 1)] * (m-1) +     # eta=theta*gamma1. Same bounds.
+                    [(0.0001,1)] +        # gamma1
+                    [(-0, 0)] * m  +         # lambda_p restrict it
+                    [(1e-6, 1.5)] * m +     # sigma
+                    [(1e-5, 0.01)]         # sigma_err - very small
+                )  
+            nlc = NonlinearConstraint(lambda x: nonlinear_constraints_mpr(x,self.m), 0, np.inf)
+     
         # theta_index = m   # Index of theta[0]
         # gamma1_index = 2*m  # Index of gamma1[0]
 
@@ -1817,7 +1949,7 @@ class LHC_single():
         
         return optim_params, Xn, Zn, Pn, se, ll
 
-    def run_n_kalmans(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20):
+    def run_n_kalmans(self, t_obs,T_M_grid, CDS_obs, base_seed = 1000,  n_restarts = 20, MPR=True):
         # Define grid of values.
         current_objective = 1e10 #very high objective.
         out_params = self.flatten_params()
@@ -1848,7 +1980,7 @@ class LHC_single():
             kappa, theta = params_q[:self.m],params_q[self.m:2*self.m]
 
             # Test several random points.
-            optim_params,  Xn,Zn, Pn,se,ll= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0, base_seed=base_seed + i)
+            optim_params,  Xn,Zn, Pn,se,ll= self.get_kalman_params(t_obs,T_M_grid, CDS_obs,x0, base_seed=base_seed + i,MPR=MPR)
         # Set new optimal parameters.
         return  optim_params,  Xn,Zn, Pn,se,ll
 

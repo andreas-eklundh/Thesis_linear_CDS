@@ -107,7 +107,7 @@ if __name__ == "__main__":
         # To have some grid to plot.
         plot_grid = np.array([i *0.2 for i in range(int(np.max(mat_grid)/0.2)+ 1)])    
         #### Break look so above is just a 'oneoff'
-        data = np.load(f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/{firm}/Data_{firm}.npz")
+        data = np.load(f"./Gamma_Calibration/{firm}/Data_{firm}.npz")
         t_mats_plots = data['t_mats_plots']
         survival=data['survival']
         Gamma = data['Gamma']

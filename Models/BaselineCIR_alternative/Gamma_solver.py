@@ -465,7 +465,7 @@ if __name__ == "__main__":
          default_prob = 1- survival,
          gamma_hist = cali_params)
     
-    data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/CDS_TS_plot.npz")
+    data = np.load("./Gamma_Calibration/CDS_TS_plot.npz")
     t_mats_plots = data['t_mats_plots']
     survival=data['survival']
     Gamma = data['Gamma']

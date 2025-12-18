@@ -4,7 +4,7 @@ import pandas as pd
 import os
 from Models.Utils import global_fit_measures
 from Models.LHCModels.LHC_single import LHC_single
-from Models.BaselineCIR_alternative.CIR_numba import calc_cds
+
 from Models.LHCModels.LHC_single import cds_fun
 from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity
 import matplotlib.pyplot as plt

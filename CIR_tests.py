@@ -35,7 +35,7 @@ if __name__ == '__main__':
     t = np.array(test_df['Years']) # t of the CDS.
     CDS_obs = np.array(test_df[['1Y','3Y','5Y','7Y','10Y']])
     # Read in inferred survival probs.
-    data = np.load("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Gamma_Calibration/DANBNK/Data_DANBNK.npz")
+    data = np.load("./Gamma_Calibration/DANBNK/Data_DANBNK.npz")
     t_mats_plots = data['t_mats_plots']
     survival=data['survival']
     Gamma = data['Gamma']
@@ -185,7 +185,7 @@ if __name__ == '__main__':
     plt.close(fig)
 
 
-    # np.savez("C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/DANBNK/Kalman_resultsCIR.npz",
+    # np.savez("./Results/DANBNK/Kalman_resultsCIR.npz",
     #         final_param=params,
     #         Xn=Xn,
     #         Zn=Zn,

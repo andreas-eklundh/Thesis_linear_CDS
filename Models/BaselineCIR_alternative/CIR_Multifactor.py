@@ -3,7 +3,7 @@ from scipy.optimize import minimize, NonlinearConstraint, Bounds
 from scipy.interpolate import CubicSpline
 from numba import njit, float64, int64
 from Models.ATSMGeneral.ATSM import ATSM
-from Models.BaselineCIR_alternative.CIR_numba import calc_cds,calc_CDS_numba
+from Models.BaselineCIR_alternative.CIR_numba import calc_CDS_numba
 from Models.BaselineCIR_alternative.Gamma_solver import DeterministicGamma
 from scipy.stats import norm, ncx2, gamma, expon,uniform
 from scipy.integrate import quad
@@ -582,8 +582,54 @@ class CIRIntensity():
         # concatenate both
         return np.concatenate(cons)  # length 2*d
 
-    # Optimizer function.
-    def run_kalman_filter(self, t_obs,t_mat_grid,Y,seed=1000):
+
+    def feller_constraint_mpr(self,params):
+        d = self.X_dim
+        # unpack
+        kappa     = params[0:d]
+        theta     = params[d:2*d]
+        sigma     = params[2*d:3*d]
+        lambda1   = params[3*d:4*d]
+        sigma_err = params[-1]
+
+        kappa_p,  theta_p = self.build_P_drift(lambda1,np.zeros_like(lambda1),kappa,theta)
+
+        cons = []
+
+        # latent CIR Feller: 2*kappa*theta - sigma^2 >= 0
+        # combine feller conditions.
+        prod_min = np.minimum(kappa*theta,kappa_p*theta_p)
+        # if self.cascading:
+        #     feller = 2*prod_min[-1] - sigma[-1]**2  # vector length d
+        #     cons.append(np.asarray(feller).flatten())
+        # else:
+        # Feller is only necessary for last factor as in LHC!!!
+        feller = 2*prod_min[-1] # - sigma[-1]**2  # vector length d
+        cons.append(np.asarray(feller).flatten())
+        # Constraint on lambda.
+        g3 = kappa - lambda1
+        cons.append(g3)
+        # g4 = lambda1 + kappa*theta
+        # cons.append(g4)
+        # add identification constraint. Kappas decreasing.
+        # if (self.X_dim>1) & (self.cascading == False):
+        # g5 = np.asarray(kappa[:-1]-kappa[1:]+1e-3).flatten() # kappai <= kappa_{i-1}
+        # cons.append(np.asarray(g5).flatten())
+
+        # if self.X_dim>1:
+        #     g5 = np.asarray(theta[:-1]-theta[1:]+1e-3).flatten() # kappai <= kappa_{i-1}
+        #     cons.append(np.asarray(g5).flatten())
+        # We will do the same for theta.
+        # if  (self.X_dim>1) & (self.cascading == False):
+        # g5 = np.asarray(lambda1[1:]-lambda1[:-1]+1e-3).flatten() # kappai <= kappa_{i-1}
+        # cons.append(np.asarray(g5).flatten())
+        # concatenate both
+        return np.concatenate(cons)  # length 2*d
+
+
+
+    # Optimizer function. Assume MPR specification.
+    def run_kalman_filter(self, t_obs,t_mat_grid,Y,seed=1000,MPR=True):
         self.set_params(params=None,seed=seed)
 
         # Get initial values. Z
@@ -594,14 +640,25 @@ class CIRIntensity():
         # Try a different optimizer than nelder mead
         d = self.X_dim  # number of factors
         # Kappa and theta may be slightly larger than 1 presumably.
-        bounds = (
-            [(1e-6, 2)] * d +     # kappa
-            [(1e-6, 1)] * d +     # theta - bound by 1 to keep down
-            [(1e-6, 2)] * d +     # sigma (assuming per-factor vol)
-            [(-0.6, 0.6)] * d  +         # lambda_p restrict it
-            [(1e-5, 0.05)]         # sigma_err
-        )
-        nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
+        if MPR:
+            bounds = (
+                [(1e-6, 2)] * d +     # kappa
+                [(1e-6, 1)] * d +     # theta - bound by 1 to keep down
+                [(1e-6, 2)] * d +     # sigma (assuming per-factor vol)
+                [(-0.6, 0.6)] * d  +         # lambda_p restrict it
+                [(1e-5, 0.05)]         # sigma_err
+            )
+            nonlinear_constraint = NonlinearConstraint(self.feller_constraint, 0, np.inf)
+
+        elif MPR == False:
+            bounds = (
+                [(1e-6, 2)] * d +     # kappa
+                [(1e-6, 1)] * d +     # theta - bound by 1 to keep down
+                [(1e-6, 2)] * d +     # sigma (assuming per-factor vol)
+                [(-0, 0)] * d  +         # lambda_p restrict it
+                [(1e-5, 0.05)]         # sigma_err
+            )
+            nonlinear_constraint = NonlinearConstraint(self.feller_constraint_mpr, 0, np.inf)
         # Scaling down optimization here as it takes quite a long time.
         result = differential_evolution(
             func=self.Kalman,
@@ -1125,7 +1182,7 @@ class CIRIntensity():
 
 
     def calc_CDS_fast_numba(self, t, t0, t_mat, X, interp):
-        # utilofAItowritthisinafastmannr.
+        # Wratter class to rewrite and compile this fast interpolation code in numba.
         return calc_CDS_numba(
             t, t0, t_mat, X,
             interp['tau_grid'],

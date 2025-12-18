@@ -24,7 +24,7 @@ files_map_cir = {
 }
 # --- Configuration Part 2 (New) ---
 FIRMS = [ 'DANBNK', 'MONTE']
-BASE_PATH = r"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results"
+BASE_PATH = r"./Results"
 
 # Define the order of parameters for the Firm tables
 # Note: AFC does not have Gamma, handled in logic.
@@ -738,7 +738,7 @@ def lookback_table():
         for firm in ['DANBNK','MONTE']:
             # Read in data.
             
-            directory = f"C:/Users/andre/OneDrive/KU, MAT-OEK/Kandidat/Thesis/Thesis_linear_CDS/Results/{firm}"
+            directory = f"./Results/{firm}"
             filepath = os.path.join(directory, f"Option_data_{firm}_X{x_dim}.npz")
             option_data = np.load(filepath)
             if firm == 'MONTE':
