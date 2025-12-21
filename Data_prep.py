@@ -48,7 +48,7 @@ for ticker in tickers:
     plt.ylabel("Par Spread")
     plt.legend(loc="upper center",
                 bbox_to_anchor=(0.5, -0.15),  
-                ncol=4,                       
+                ncol=7,                       
                 fontsize=12,                  
                 frameon=True)
     plt.grid(True)
