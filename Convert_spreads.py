@@ -49,57 +49,57 @@ if __name__ == "__main__":
         # Generate synthetic "market" CDS values (set to zero at par spread condition)
         
         # To have some grid to plot.
-        plot_grid = np.array([i *0.2 for i in range(int(np.max(mat_grid)/0.2)+ 1)])    
-        Gamma, survival = np.zeros((CDS_obs.shape[0], plot_grid.shape[0])),np.zeros((CDS_obs.shape[0], plot_grid.shape[0]))
-        cali_params = np.zeros((CDS_obs.shape[0], mat_grid.shape[0]))
-        for t_idx in range(CDS_obs.shape[0]):
-            # Loop over time points
-            # Generate necessary values:        
-            # Calibrate back hazard rates
-            t_grid_payments = np.array([tenor*i for i in range(int(np.max(mat_grid)/tenor)+1)])   
+    #     plot_grid = np.array([i *0.2 for i in range(int(np.max(mat_grid)/0.2)+ 1)])    
+    #     Gamma, survival = np.zeros((CDS_obs.shape[0], plot_grid.shape[0])),np.zeros((CDS_obs.shape[0], plot_grid.shape[0]))
+    #     cali_params = np.zeros((CDS_obs.shape[0], mat_grid.shape[0]))
+    #     for t_idx in range(CDS_obs.shape[0]):
+    #         # Loop over time points
+    #         # Generate necessary values:        
+    #         # Calibrate back hazard rates
+    #         t_grid_payments = np.array([tenor*i for i in range(int(np.max(mat_grid)/tenor)+1)])   
             
-            cali_params[t_idx, : ] = model.calibrate_deterministic(CDS_obs[t_idx,:] , mat_grid, 0.0, t_grid_payments)
-            # Generate the survial probabilities/survival process
-            for i in range(plot_grid.shape[0]):
-                # Get integrated process for each plot grid points. Is over maturities.
-                Gamma[t_idx,i] = model.Gamma_fun(cali_params[t_idx, : ] , 
-                                                 plot_grid[i],t_mats)
+    #         cali_params[t_idx, : ] = model.calibrate_deterministic(CDS_obs[t_idx,:] , mat_grid, 0.0, t_grid_payments)
+    #         # Generate the survial probabilities/survival process
+    #         for i in range(plot_grid.shape[0]):
+    #             # Get integrated process for each plot grid points. Is over maturities.
+    #             Gamma[t_idx,i] = model.Gamma_fun(cali_params[t_idx, : ] , 
+    #                                              plot_grid[i],t_mats)
                 
-            print(f'Done implied {(t_idx+1)/CDS_obs.shape[0]}, {firm}')
-        survival = np.exp(-Gamma )
+    #         print(f'Done implied {(t_idx+1)/CDS_obs.shape[0]}, {firm}')
+    #     survival = np.exp(-Gamma )
 
-        save_path = f"./Gamma_Calibration/{firm}/" 
-        os.makedirs(save_path, exist_ok=True)
+    #     save_path = f"./Gamma_Calibration/{firm}/" 
+    #     os.makedirs(save_path, exist_ok=True)
 
-        # First save processes for use in later stuff.
-        np.savez(os.path.join(save_path, f"Data_{firm}.npz"),
-             t_mats_plots = plot_grid,
-             survival=survival,
-             Gamma = Gamma,
-             default_prob = 1- survival,
-             gamma_hist = cali_params)
+    #     # First save processes for use in later stuff.
+    #     np.savez(os.path.join(save_path, f"Data_{firm}.npz"),
+    #          t_mats_plots = plot_grid,
+    #          survival=survival,
+    #          Gamma = Gamma,
+    #          default_prob = 1- survival,
+    #          gamma_hist = cali_params)
         
-    for firm in firms:
-        test_df = sub_df[(sub_df['Ticker']==firm)]
-        test_df = test_df.pivot(index = ['Date','Ticker'],
-                                columns='Tenor',values = 'Par Spread').reset_index()
-        # Test on subset data ownly to get very few obs. One large spread increase to test.
-        test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
+    # for firm in firms:
+    #     test_df = sub_df[(sub_df['Ticker']==firm)]
+    #     test_df = test_df.pivot(index = ['Date','Ticker'],
+    #                             columns='Tenor',values = 'Par Spread').reset_index()
+    #     # Test on subset data ownly to get very few obs. One large spread increase to test.
+    #     test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
 
-        t = np.array(test_df['Years'])
+    #     t = np.array(test_df['Years'])
 
-        mat_grid = np.array([1,2,3,4,5,7,10])
-        t0 = 0.0
-        t_mats = np.concatenate(([t0], mat_grid))
+    #     mat_grid = np.array([1,2,3,4,5,7,10])
+    #     t0 = 0.0
+    #     t_mats = np.concatenate(([t0], mat_grid))
 
-        t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
+    #     t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
 
-        # For simplicity just assume t0=t. 
-        # Payments are then every 0.25 year.     
+    #     # For simplicity just assume t0=t. 
+    #     # Payments are then every 0.25 year.     
 
-        # Get payment grids of quarterly.
-        CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']].ffill().bfill())
-        model = DeterministicGamma(r, delta, tenor)
+    #     # Get payment grids of quarterly.
+    #     CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']].ffill().bfill())
+    #     model = DeterministicGamma(r, delta, tenor)
 
         # RUN LATER - MORE CONSUMING
         # Generate synthetic "market" CDS values (set to zero at par spread condition)
@@ -135,7 +135,7 @@ if __name__ == "__main__":
         ax.set_xlabel('Time t')
         ax.set_ylabel('Maturity t_M')
         ax.set_zlabel('Gamma(t,t_M)')
-        ax.set_title('Cumulative Hazard Surface')
+        # ax.set_title('Cumulative Hazard Surface')
 
         fig.colorbar(surf, shrink=0.5, aspect=10, label='Gamma')
         fig.savefig(os.path.join(save_path, f"Default_curve_{firm}.png"), dpi=150)
