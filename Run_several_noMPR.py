@@ -12,7 +12,7 @@ if __name__ == "__main__":
     #### Preliminary investigation.
     sub_df = pd.read_excel("./Data/subset_data.xlsx")
     # Pivot
-    firms = ['DANBNK','MONTE']
+    firms = ['MONTE']
 
 # # SECTION 1.2: LHC KALMAN FITS
     # for firm in firms:
@@ -99,11 +99,11 @@ if __name__ == "__main__":
         Gamma_kalman_scale =Gamma_kalman #/ mat_grid[None, :]
 
         # Negative process. Multiply by -1 everywhere. Let A and a get these too.
-        for X_dim in [1,2,3]:# , 2]:
+        for X_dim in [3]:# , 2]:
             cir = CIRIntensity(r,delta,tenor,X_dim,cascading=True)
             x0 = np.array([0])
             ll, params, Xn,Zn,Pn,se = cir.run_kalman_filter(t,t_mat_grid,
-                                                        Y=Gamma_kalman_scale ,seed=2000,MPR=False)
+                                                        Y=Gamma_kalman_scale ,seed=2001,MPR=False)
 
 
             # Set new optimal parameters too.

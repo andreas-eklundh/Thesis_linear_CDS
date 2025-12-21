@@ -8,18 +8,25 @@ There are four main classes all located under models.
 * CIR_Multifactor.py. Class with the affine benchmark model
 * moments: Implementation of theorem 2 in the thesis i.e. the Polynomial conditional moments. 
 * Gamma_solver.py: Class for converting observed spreads into deterministic default intensities. 
-* ATSM.py: The general affine class as of Duffie. 
+* ATSM.py: The general affine class as of D. Duffie. 
 
-Other scripts are used and utilized in the above. However, this is where the modeling work is. 
+Other scripts and methods are used and utilized in the above. However, this is where the modeling work is. 
 
 ## Output scripts
-
-* Simulation_studies.py: Runs the simulations of the affine class and lhc model with known parameters.
-* Run_several.py: Runs the models for MONTE, SVSKHB, DANBNK, CZMB. 
+ 
 * Data_prep.py: Cleans data. 
-* Out_several.py: outputs figures in text for run_several.py.
-* Out_options.py: Sends out option prices as described in the thesis.
+* Simulation_studies.py: Runs the simulations of the affine class and lhc model with known parameters.
+* Likelihoods.py: Outputs likelihood plots of chapter 6 using values above. 
 * Convert_spreads.py. Utilizes the Gamma_solver to convert spreads to deterministic default intensities. 
+* Run_several.py: Runs the models for MONTE, DANBNK.
+* Out_several.py: outputs figures in text for run_several.py. These figures are used in the thesis.
+* Out_options.py: Sends out option prices as described in the thesis.
+* Format results.py: This takes some of the created data obtained by running the above and outputs it the tables used in the thesis. 
+* PCA_idea_generation.py: This runs a very small PCA analysis. 
+
+
+Other files have primarily been added for testing various thoughts, ideas etc. during the progress of the thesis. 
+
 
 
 

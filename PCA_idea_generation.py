@@ -50,7 +50,7 @@ for firm in ['DANBNK','MONTE']:
 
     # Plot individual variance bars
     bars = plt.bar(range(1, len(maturities) + 1), explained_variance_ratio, 
-                alpha=0.6, color='skyblue', label='Individual Variance')
+                alpha=0.6, color='skyblue', label='Explained variance of factor i')
 
     # Add text labels on bars
     for i, bar in enumerate(bars):
@@ -64,12 +64,16 @@ for firm in ['DANBNK','MONTE']:
         )
 
     # Labels and title
-    plt.xlabel('Principal Component Number', fontsize=12)
-    plt.ylabel('Explained Variance Ratio', fontsize=12)
+    plt.xlabel('Principal Component', fontsize=12)
+    plt.ylabel('Explained Variance', fontsize=12)
     plt.xticks(range(1, len(maturities) + 1))
     plt.grid(axis='y', linestyle='--')
     plt.axhline(y=0.95, color='r', linestyle='-', label='95% Explained variance')
-    plt.legend()
+    plt.legend(loc="upper center",
+                bbox_to_anchor=(0.5, -0.15),  
+                ncol=2,                       
+                fontsize=12,                  
+                frameon=True)
     plt.tight_layout()
     plt.savefig(f'./Results/PCA/ExplainedVariance_{firm}.png')
     plt.close()

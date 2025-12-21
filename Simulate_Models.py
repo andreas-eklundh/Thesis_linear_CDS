@@ -103,7 +103,7 @@ if __name__ == "__main__":
 
 
         # Draw noise vector:
-        save_path = "./Simulation_studies/"   # <--- change to your path
+        save_path = "./Simulation_studies/" 
         color_cycle = plt.cm.tab10.colors  
 
         R = norm.rvs(size = (t_mat_grid.shape[0]*t_mat_grid.shape[1]),scale = lhc.sigma_err).reshape(t_mat_grid.shape) # simulate at beginning - faster!
@@ -738,7 +738,7 @@ if __name__ == "__main__":
 
 
         # Draw noise vector:
-        save_path = "./Simulation_studies/"   # <--- change to your path
+        save_path = "./Simulation_studies/" 
         color_cycle = plt.cm.tab10.colors  
 
         R = norm.rvs(size = (t_mat_grid.shape[0]*t_mat_grid.shape[1]),scale = lhc.sigma_err).reshape(t_mat_grid.shape) # simulate at beginning - faster!

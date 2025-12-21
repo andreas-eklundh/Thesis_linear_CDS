@@ -3,7 +3,7 @@ import os
 import numpy as np
 from Models.LHCModels.LHC_wGamma1 import LHC_single as LHC_wGamma1
 from Models.LHCModels.LHC_single import LHC_single as LHC_single
-from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity as CIR
+from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity 
 
 
 # --- Configuration ---
@@ -143,13 +143,6 @@ def get_row_data(param_name_csv, dfs, lhc=True):
                 else:
                     row_cells.extend(["-", "-"])
         else:
-            # If the file is missing or the specific parameter isn't in this dimension
-            # We output "-" if the file exists but param is missing, or empty if file is missing?
-            # Based on your table, empty entries (no hyphen) usually mean "not applicable" for that dimension.
-            # While "-" means "applicable but missing/zero".
-            # For now, if the DF is missing (Dim 3), we leave it blank. 
-            # If DF exists but param missing (e.g. kappa2 in Xdim1), we usually leave it blank or put "-".
-            # The prompt has empty slots for k2 in LHCC(1).
             if lhc:
                 row_cells.extend(["-", "-", "-"])
             else: 
@@ -265,15 +258,10 @@ def get_param_value(param_name, param_array, m,model):
         if p_idx > m:
             return None
 
-    # --- LOGIC TO MAP NAME TO ARRAY INDEX ---
-    # Adjust these offsets based on your specific vector construction!
     
     # 0-based index conversion
         idx_in_group = p_idx - 1 
-    
-    # Example logic (ADJUST THIS):
-    # Array = [k1..km, th1..thm, sig1..sigm, ...]
-    # Logic if Affine
+
     if model == 'affine':
         if p_type == "kappa":
             flat_idx = 0 + idx_in_group
@@ -434,7 +422,50 @@ def generate_firm_tables():
             # Load AFC Kalman
             d = np.load(fp_afc)
             data_pack['afc_kal'] = d['final_param'].flatten()
-            data_pack['afc_se'] = d['SE'].flatten()
+            # Rerun se for afc model -> asburdly large sE likely due to num errors
+            sub_df = pd.read_excel("./Data/subset_data.xlsx")
+
+            test_df = sub_df[(sub_df['Ticker']==firm)]
+            test_df = test_df.pivot(index = ['Date','Ticker'],
+                                    columns='Tenor',values = 'Par Spread').reset_index()
+            # Test on subset data ownly to get very few obs. One large spread increase to test.
+            test_df['Years']= ((test_df['Date'] - test_df['Date'].min()).dt.total_seconds() / (365.25 * 24 * 3600)).drop_duplicates()
+
+            t = np.array(test_df['Years'])
+
+            mat_grid = np.array([1,2,3,4,5,7,10])
+            t_mat_grid = np.ascontiguousarray(mat_grid[:, None] + t[None, :])   # shape (len(T_M_grid), len(t_obs))
+            # Forward fill in case of nans.
+            CDS_obs = np.array(test_df[['1Y','2Y','3Y','4Y','5Y','7Y','10Y']].ffill().bfill())
+
+            # Read in inferred survival probs.
+            data = np.load(f"./Gamma_Calibration/{firm}/Data_{firm}.npz")
+            t_mats_plots = data['t_mats_plots']
+            survival=data['survival']
+            Gamma = data['Gamma']
+            default_prob = data['default_prob']
+            gamma_hist = data['gamma_hist']
+            
+            t_mats_plots_kalman = t_mats_plots[np.isin(t_mats_plots,mat_grid).flatten()]
+
+            survival_kalman = survival[:,np.isin(t_mats_plots, mat_grid).flatten()]
+            Gamma_kalman = Gamma[:,np.isin(t_mats_plots, mat_grid).flatten()]
+            Gamma_kalman_scale =Gamma_kalman #/ mat_grid[None, :]
+
+            r = 0.00248
+            delta = 0.4
+            tenor = 0.25
+            cir = CIRIntensity(r,delta,tenor,m,cascading=True)
+            # Set new optimal parameters too.
+            cir.set_params(data_pack['afc_kal'])
+
+            data_pack['afc_se']  =cir.kalman_SE(data_pack['afc_kal'],
+                                                t_obs=t, t_mat_grid=t_mat_grid, 
+                                                Y=Gamma_kalman,result=True,eps=1e-5)
+
+
+
+            # data_pack['afc_se'] = d['SE'].flatten()
             data_pack['afc_ll'] = d['log_likeli']
             
             data_pack['exists'] = True
@@ -766,6 +797,7 @@ def lookback_table():
     print(latex)
     print("\n")
     print(f'DANBNK spot: {danbnk_spot}, MONTE spot: {monte_spot}')
+
 
 
 

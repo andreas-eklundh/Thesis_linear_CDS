@@ -386,7 +386,7 @@ if __name__ == "__main__":
         survival[i] = np.exp(-Gamma[i] )
         
 
-    save_path = "./Gamma_Calibration/"   # <--- change to your path
+    save_path = "./Gamma_Calibration/"  
     os.makedirs(save_path, exist_ok=True)
 
 

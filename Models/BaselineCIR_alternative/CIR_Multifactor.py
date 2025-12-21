@@ -854,7 +854,7 @@ class CIRIntensity():
         t: Time to price at
         t0: Start of CDS.
         t_M: Maturity of CDS
-        T: Maturity of option. Needs to satisfy T<t_m
+        T: Maturity of option. Needs to satisfy T<t_0
         '''
         # N prices are comuted and averaged MC
         N_strikes = barriers.shape[0]
@@ -882,10 +882,10 @@ class CIRIntensity():
             
             # Get model implies CDS.
             CDS_sim = np.zeros(Lambda.shape)
+
             for n in range(CDS_sim.shape[0]):
                 CDS_sim[n]  = self.calc_CDS_fast_numba(T_return[n],t0, t_M, X_t[n,:],
                                                 interp_struct)
-
 
                 # Break loop if default happens at date
                 if default_event[n]:
@@ -921,7 +921,7 @@ class CIRIntensity():
         t: Time to price at
         t0: Start of CDS.
         t_M: Maturity of CDS
-        T: Maturity of option. Needs to satisfy T<t_m
+        T: Maturity of option. Needs to satisfy T<t_0
         '''
         # N prices are comuted and averaged MC
         prices = np.zeros(shape = N)
@@ -977,7 +977,7 @@ class CIRIntensity():
 
         return prices_MC_hist,price_MC,cds_min
 
-    ##### The Option inversion formula (can be used to eurpean like options.)
+    ##### The Option inversion formula (can be used to eurpean like options. NOT for CS's thoguh)
     def G_transform(self,y,a,b,Xt,T):
         params = np.concatenate([self.kappa, self.theta, self.sigma,self.kappa_p, self.theta_p,self.sigma_err])
         first_term = self.Laplace_Transform(params,Xt,T,a)
@@ -995,55 +995,14 @@ class CIRIntensity():
         return np.real(first_term/2 - Laplace_int/np.pi)
 
 
-    def cir_solution_T(self,cir_params,T,rho=1):
-        x0 = np.zeros(self.X_dim)
-        kappa,theta,sigma1,lambda_i,sigma_err = self.unpack_params(cir_params)
-        gamma = np.sqrt(kappa**2 + 2*sigma1**2*rho)
-        beta_nom1 =  (- 2 * rho * gamma*(np.exp(gamma*T)) +
-                        gamma*x0 * np.exp(gamma * T) * (gamma - kappa))
 
-        beta_denom = (2 * gamma +
-                        (gamma + kappa - x0 * sigma1**2) * (np.exp(gamma * T) - 1))
-
-
-        term1 = beta_nom1 / beta_denom
-
-        beta_nom2 = (- 2 * rho * (np.exp(gamma*T)-1) +
-                        x0 * np.exp(gamma * T) * (gamma - kappa) +
-                        x0 * (gamma + kappa)) *  (gamma + kappa - x0 * sigma1**2) *gamma* (np.exp(gamma * T))
-        beta_denom2 = (2 * gamma +
-                        (gamma + kappa - x0 * sigma1**2) * (np.exp(gamma * T) - 1))**2
-
-        term2 = beta_nom2 / beta_denom2
-
-        beta_T = term1 - term2
-
-        # get alpha, alo verify above.
-        alpha_log_nom = (2 * gamma * np.exp((gamma + kappa ) * T / 2))
-
-        alpha_log_denom = (2 * gamma +
-                            (gamma + kappa - x0 * sigma1**2)*(np.exp(gamma * T)-1))
-
-        alpha_T = 2 * kappa * theta / sigma1**2 * (
-            alpha_log_denom/alpha_log_nom * (
-                gamma * (gamma + kappa) / alpha_log_denom -
-                alpha_log_nom * (gamma + kappa - x0*sigma1**2) * gamma * np.exp(gamma*T) /alpha_log_denom
-            )
-        )
-
-        return alpha_T, beta_T
-
-
-## Adding optimized code for kalman filter and cds conversinos
-
+## Adding optimized code for kalman filter and cds conversinos. 
     def precompute_affine_grid(self, params, T_max, N_grid=500, rho=1):
         # tau grid from 0 to T_max (include 0)
         tau_grid = np.linspace(0.0, float(T_max), int(N_grid))
-        # compute once: use x0 = zeros (as your Laplace calls do)
         x0 = np.zeros(self.X_dim)
         # cir_solution expects T possibly array-like
         alpha_grid, beta_grid = self.cir_solution(params, x0, tau_grid, rho=rho)
-        # shapes: alpha_grid (len(tau_grid),), beta_grid (len(tau_grid), X_dim) in your implementation
         # ensure arrays are numpy arrays
         alpha_grid = np.asarray(alpha_grid).reshape(len(tau_grid), -1).squeeze()
         beta_grid = np.asarray(beta_grid)
@@ -1052,16 +1011,15 @@ class CIRIntensity():
         alpha_x_grid = np.asarray(alpha_x_grid).reshape(len(tau_grid), -1).squeeze()
         beta_x_grid = np.asarray(beta_x_grid)
 
-        # Build interpolants for alpha (scalar), beta (vector), alpha_x (scalar), beta_x (matrix)
-        # interp1d expects axis 0 = tau
-        # kind = 'cubic' if len(tau_grid) >= 8 else 'linear'
-        kind = 'cubic'
+        # Build interpolation using interp1d from scipy
+        kind = 'linear'
         # interpolate linearly i.e.
         alpha_interp = interp1d(tau_grid, alpha_grid, kind=kind, axis=0, fill_value='extrapolate', assume_sorted=True)
         alpha_x_interp = interp1d(tau_grid, alpha_x_grid, kind=kind, axis=0, fill_value='extrapolate', assume_sorted=True)
         beta_interp = interp1d(tau_grid, beta_grid, kind=kind, axis=0, fill_value='extrapolate', assume_sorted=True)
         beta_x_interp = interp1d(tau_grid, beta_x_grid, kind=kind, axis=0, fill_value='extrapolate', assume_sorted=True)
 
+        # Return the grids and the interpolation functions
         return {
             'tau_grid': tau_grid,
             'alpha_grid': alpha_grid,
@@ -1076,25 +1034,25 @@ class CIRIntensity():
 
 
     def interpolate_laplace(self, interp_struct, lambda_t, tau):
-        # Function to get laplace given interpolation
+        # Function to get laplace given interpolation grid
         # Ensure lambda_t as 1D vector of length X_dim
         lam = np.asarray(lambda_t).ravel()
-        alpha_vals = interp_struct['alpha_interp'](tau)         # shape (len(tau),)
-        beta_vals = interp_struct['beta_interp'](tau)           # shape (len(tau), X_dim)
+        alpha_vals = interp_struct['alpha_interp'](tau)         
+        beta_vals = interp_struct['beta_interp'](tau)          
 
         expo = alpha_vals  + beta_vals @ lam
         return np.exp(expo)
 
 
     def interpolate_derivates(self, interp_struct, lambda_t, tau):
+        # Interpolate the derivatives.
         lam = np.asarray(lambda_t).ravel()
-        alpha_x_vals = interp_struct['alpha_x_interp'](tau)     # (len(tau),)
-        beta_x_vals = interp_struct['beta_x_interp'](tau)       # (len(tau), X_dim)
+        alpha_x_vals = interp_struct['alpha_x_interp'](tau)     
+        beta_x_vals = interp_struct['beta_x_interp'](tau)       
         # The einsum is to get it for each lamba
         return alpha_x_vals + beta_x_vals @ lam  # (len(tau),)
 
 
-    # Vectorized fast legs (replace your old calc_* with these)
     def calc_coupon_leg_fast(self, params, t, t0, t_mat, lambda_t, interp_struct, tau_fine_per_coupon=40):
         # payment dates grid
         t_grid = np.arange(t0, float(t_mat) + 1e-12, self.tenor)
@@ -1119,19 +1077,17 @@ class CIRIntensity():
         # choose number of points proportional to interval length if desired
         N = max(200, int((tau_end - tau_start) * tau_fine_per_coupon))
         tau = np.linspace(tau_start, tau_end, N)
-        # intrpolat.
-        disc = np.exp(-self.r * tau)
-        deriv = self.interpolate_derivates(interp_struct, lambda_t, tau)   # vector
-        LT_vals = self.interpolate_laplace(interp_struct, lambda_t, tau)
-        integrand = (1.0 - self.delta) * disc * deriv * LT_vals
+        # interpolate.
+        discount = np.exp(-self.r * tau)
+        deriv_term = self.interpolate_derivates(interp_struct, lambda_t, tau)   
+        laplace = self.interpolate_laplace(interp_struct, lambda_t, tau)
+        integrand = (1.0 - self.delta) * discount * deriv_term * laplace
         prot_val = np.trapz(integrand, tau)
         return prot_val
 
 
     def calc_accrual_leg_fast(self, params, t, t0, t_mat, lambda_t, interp_struct, tau_fine_per_coupon=40):
         t_grid = np.arange(t0, float(t_mat) + 1e-12, self.tenor)
-        if len(t_grid) < 2:
-            return 0.0
         total = 0.0
         # Approximate integral for each payment dat
         for j in range(1, len(t_grid)):
@@ -1144,12 +1100,13 @@ class CIRIntensity():
             # Correct up till default date
             default_frac = u_local - a   # vector
             # Discount terms for each subsum of paymaent dates
-            disc = np.exp(-self.r * tau_local)
+            discount = np.exp(-self.r * tau_local)
             # Evaluate drivative at each point here:
-            deriv = self.interpolate_derivates(interp_struct, lambda_t, tau_local)
+            deriv_term = self.interpolate_derivates(interp_struct, lambda_t, tau_local)
             # Evaluate laplace similarly using interpolation.
-            LT_vals = self.interpolate_laplace(interp_struct, lambda_t, tau_local)
-            integrand = disc * default_frac * deriv * LT_vals
+            laplace = self.interpolate_laplace(interp_struct, lambda_t, tau_local)
+            integrand = discount * default_frac * deriv_term * laplace
+            # use trapzoidal rule
             total += np.trapz(integrand, tau_local)
         return total
 
@@ -1158,20 +1115,18 @@ class CIRIntensity():
         prot = self.calc_protection_leg_fast(params, t,t0, t_mat, lambda_t, interp_struct)
         I1 = self.calc_coupon_leg_fast(params, t,t0, t_mat, lambda_t, interp_struct)[0]
         I2 = self.calc_accrual_leg_fast(params, t,t0, t_mat, lambda_t, interp_struct)
-        # avoid divide by zero
         denom = I1 + I2
-        if denom == 0:
-            return 0.0
         return prot / denom
         # prot_val = self.calc_protection_leg(params,t,t0,t_mat, lambda_t)
         # I1 = self.calc_coupon_leg(params,t,t0,t_mat, lambda_t)
         # I2 = self.calc_accrual_leg(params,t,t0,t_mat, lambda_t)
 
     def cds_spread_fast(self, X, params, t, t_mat_grid, t0=None, interp_struct=None):
+        # Calculate for several. calculate interpolation too.
         if t0 is None:
             t0 = t
         if interp_struct is None:
-            # precompute up to max maturity requested
+            # precompute up to max maturity
             T_max = np.max(t_mat_grid) - t
             interp_struct = self.precompute_affine_grid(params, T_max, N_grid= 10000+1, rho=1)
         results = np.zeros_like(t_mat_grid, dtype=float)
@@ -1182,7 +1137,9 @@ class CIRIntensity():
 
 
     def calc_CDS_fast_numba(self, t, t0, t_mat, X, interp):
-        # Wratter class to rewrite and compile this fast interpolation code in numba.
+        # Wrapper class to rewrite and compile this fast interpolation code in numba.
+        # Essentially does the same as CS_spread_fast, just numba compiled and uses same
+        # a custom linear interpolation
         return calc_CDS_numba(
             t, t0, t_mat, X,
             interp['tau_grid'],

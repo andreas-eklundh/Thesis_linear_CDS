@@ -21,8 +21,6 @@ if __name__ == '__main__':
     # cir = CIR(0.00248,0.4,0.25,X_dim,cascading=True)
     # # Here, parameters are set already
     # seed = 4000
-
-    # rng = np.random.default_rng(4000)
     # r = cir.r
     # delta = cir.delta
     # tenor = cir.tenor
@@ -35,7 +33,7 @@ if __name__ == '__main__':
     # alpha = 2 * cir.kappa_p*  cir.theta_p /  cir.sigma**2
     # beta = 2 * cir.kappa_p /  cir.sigma**2
     # # CIR values.
-    # lambda0 = np.cumsum(cir.theta_p[::-1])[::-1] # In the CIR cascading.
+    # lambda0 = np.cumprod(cir.theta_p[::-1])[::-1] # In the CIR cascading.
     # # This is undekkr Q
     # T_return,lambda_mil_Q = cir.simulate_intensity(lambda0=lambda0,T=T,M=M,scheme="Milstein",seed=seed,measure='P')
 
@@ -139,7 +137,7 @@ if __name__ == '__main__':
 
     # n_points = 20
     # grids = {}
-    # for key, val in true_params.items():
+    # for key, val in kalman_params.items():
     #     spread = grid_spread[key]
     #     val = float(val)  # ensure scalar
     #     if key == "lambda1":
@@ -163,7 +161,7 @@ if __name__ == '__main__':
     #     print(f"--- Investigating parameter: {param_name} ---")
 
     #     for val in grid_values:
-    #         pvals = true_params.copy()
+    #         pvals = kalman_params.copy()
     #         pvals[param_name] = val
 
     #         # Build param vector: [kappa, theta, gamma1, lambda_i, sigma, sigma_err]
@@ -178,7 +176,7 @@ if __name__ == '__main__':
     #         # Set new params:
     #         cir.set_params(params)
     #         # Check if feller satisfied. if not flag and color differently.
-    #         if np.any(cir.feller_constraint(params_cir) <0):
+    #         if np.any(cir.feller_constraint(params) <0):
     #             print('Feller Condition Failed')
     #             neg_log_like = np.nan
 
@@ -218,12 +216,12 @@ if __name__ == '__main__':
 
     #     # Add dashed line for true parameter value
     #     if param_name in true_params:
-    #         true_val = float(true_params[param_name])
+    #         # true_val = float(true_params[param_name])
     #         kalman_val =  float(kalman_params[param_name])
-    #         ax.axvline(true_val, color="red", linestyle="--", lw=1.5, alpha=0.8,
-    #                    label=f"True {param_name} = {round(true_val,4)}")
-    #         ax.axvline(kalman_val, color="green", linestyle="--", lw=1.5, alpha=0.8,
-    #                    label=f"Kalman {param_name} = {round(kalman_val,4)}")
+    #         # ax.axvline(true_val, color="red", linestyle="--", lw=1.5, alpha=0.8,
+    #         #            label=f"True {param_name} = {round(true_val,4)}")
+    #         ax.axvline(kalman_val, color="royalblue", linestyle="--", lw=1.5, alpha=0.8,
+    #                    label=f"{param_name}")
 
     #     # Style adjustments
     #     ax.set_title(f"Likelihood profile: {param_name}", fontsize=13)
@@ -322,12 +320,12 @@ if __name__ == '__main__':
 
         # Spread (relative or absolute)
         grid_spread = {
-            "kappa": 0.05,
-            "theta": 0.05,
+            "kappa": 0.1,
+            "theta": 0.1,
             # "gamma1": 0.05,
-            "lambda_i": 0.1,
-            "sigma": 0.05,
-            "sigma_err": 0.05
+            "lambda_i": 0.3,
+            "sigma": 0.1,
+            "sigma_err": 0.1
         }
 
         n_points = 15
@@ -411,7 +409,7 @@ if __name__ == '__main__':
 
         # =================== LIKELIHOOD LOOP =================== #
 
-        for center_label, center_params in [("true", true_params), ("kalman", kalman_params)]:
+        for center_label, center_params in [("kalman", kalman_params)]:
         # for center_label, center_params in [("true", true_params)]:
 
             grids = build_grid(center_params, center_label)
@@ -489,14 +487,14 @@ if __name__ == '__main__':
                 param_idx_pairs.append((pname, idx))
 
         n_params = len(param_idx_pairs)
-        n_cols = 4
+        n_cols = 3
         n_rows = math.ceil(n_params / n_cols)
 
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4*n_rows))
         axes = axes.flatten()
 
         for ax, (pname, idx) in zip(axes, param_idx_pairs):
-            for center_label, color in zip(["true",'kalman'], ["blue","orange"]):
+            for center_label, color in zip(['kalman'], ["royalblue"]):
                 subset = results_df[(results_df["parameter"] == pname) &
                                     (results_df["idx"] == idx) &
                                     (results_df["center"] == center_label)].copy()
@@ -507,8 +505,8 @@ if __name__ == '__main__':
                             ax=ax, lw=2, label=f"{center_label}[{idx}]")
 
             # vertical line for true value
-            ax.axvline(true_params[pname][idx], color="blue", linestyle="--", lw=1.5)
-            ax.axvline(kalman_params[pname][idx], color="orange", linestyle="--", lw=1.5)
+            # ax.axvline(true_params[pname][idx], color="blue", linestyle="--", lw=1.5)
+            ax.axvline(kalman_params[pname][idx], color="royalblue", linestyle="--", lw=1.5)
 
             ax.set_title(f"Likelihood profile: {pname}_{idx}")
             ax.set_xlabel(f"{pname}_{idx}")
@@ -609,12 +607,12 @@ if __name__ == '__main__':
 
         # Spread (relative or absolute)
         grid_spread = {
-            "kappa": 0.05,
-            "theta": 0.05,
-            "gamma1": 0.05,
-            "lambda_i": 0.1,
-            "sigma": 0.05,
-            "sigma_err": 0.05
+            "kappa": 0.1,
+            "theta": 0.1,
+            "gamma1": 0.1,
+            "lambda_i": 0.3,
+            "sigma": 0.1,
+            "sigma_err": 0.1
         }
 
         n_points = 15
@@ -698,7 +696,7 @@ if __name__ == '__main__':
 
         # =================== LIKELIHOOD LOOP =================== #
 
-        for center_label, center_params in [("true", true_params), ("kalman", kalman_params)]:
+        for center_label, center_params in [ ("kalman", kalman_params)]:
         # for center_label, center_params in [("true", true_params)]:
 
             grids = build_grid(center_params, center_label)
@@ -783,7 +781,7 @@ if __name__ == '__main__':
         axes = axes.flatten()
 
         for ax, (pname, idx) in zip(axes, param_idx_pairs):
-            for center_label, color in zip(["true",'kalman'], ["blue","orange"]):
+            for center_label, color in zip(['kalman'], ["royalblue"]):
                 subset = results_df[(results_df["parameter"] == pname) &
                                     (results_df["idx"] == idx) &
                                     (results_df["center"] == center_label)].copy()
@@ -794,8 +792,8 @@ if __name__ == '__main__':
                             ax=ax, lw=2, label=f"{center_label}[{idx}]")
 
             # vertical line for true value
-            ax.axvline(true_params[pname][idx], color="blue", linestyle="--", lw=1.5)
-            ax.axvline(kalman_params[pname][idx], color="orange", linestyle="--", lw=1.5)
+            # ax.axvline(true_params[pname][idx], color="blue", linestyle="--", lw=1.5)
+            ax.axvline(kalman_params[pname][idx], color="royalblue", linestyle="--", lw=1.5)
 
             ax.set_title(f"Likelihood profile: {pname}_{idx}")
             ax.set_xlabel(f"{pname}_{idx}")
@@ -809,6 +807,18 @@ if __name__ == '__main__':
         plt.tight_layout()
         plt.savefig(f"./Likelihoods/Likelihoods_dual_X{X_dim}_wgamma1.png", dpi=150)
         plt.close()
+
+
+
+
+### Could be interesting to see how an unconstrained method would perform.
+
+
+
+
+
+
+
 
     test = 1
 

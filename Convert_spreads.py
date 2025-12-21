@@ -68,7 +68,7 @@ if __name__ == "__main__":
             print(f'Done implied {(t_idx+1)/CDS_obs.shape[0]}, {firm}')
         survival = np.exp(-Gamma )
 
-        save_path = f"./Gamma_Calibration/{firm}/"   # <--- change to your path
+        save_path = f"./Gamma_Calibration/{firm}/" 
         os.makedirs(save_path, exist_ok=True)
 
         # First save processes for use in later stuff.
@@ -114,7 +114,7 @@ if __name__ == "__main__":
         default_prob = data['default_prob']
         gammas = data['gamma_hist']
 
-        save_path = f"./Gamma_Calibration/{firm}/"   # <--- change to your path
+        save_path = f"./Gamma_Calibration/{firm}/"   
         os.makedirs(save_path, exist_ok=True)
         # 3D plot.
         # Create meshgrid for 3D plotting

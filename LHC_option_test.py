@@ -77,8 +77,7 @@ print(f'MC: Price options strikes {strike_spreads*10000}, prices: {cdso_MC*10000
 n_poly = np.array([1,5,30])
 
 
-save_path = f"./Exploratory/"   # <--- change to your path
-
+save_path = f"./Exploratory/"   
 # Get time zero stats. 
 M = 1000 # (how continous we make the plot)
 for k in strike_spreads:

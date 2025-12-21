@@ -46,7 +46,11 @@ for ticker in tickers:
     pivot.plot(figsize=(12, 6))
     plt.xlabel("Date")
     plt.ylabel("Par Spread")
-    plt.legend(title="Tenor (Y)", loc="upper left")
+    plt.legend(loc="upper center",
+                bbox_to_anchor=(0.5, -0.15),  
+                ncol=4,                       
+                fontsize=12,                  
+                frameon=True)
     plt.grid(True)
     plt.tight_layout()
 

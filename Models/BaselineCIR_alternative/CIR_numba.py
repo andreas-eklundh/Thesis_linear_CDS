@@ -133,8 +133,6 @@ def calc_accrual_numba(t, t0, t_mat, lam,
     for i in range(n_coupons):
         t_grid[i] = t0 + i * tenor
 
-    if len(t_grid) < 2:
-        return 0.0
 
     total = 0.0
     N = 40  # per coupon integration resolution
@@ -185,7 +183,5 @@ def calc_CDS_numba(t, t0, t_mat, lam,
                               r, tenor)
 
     denom = cpn + accr
-    if denom == 0:
-        return 0.0
 
     return prot / denom

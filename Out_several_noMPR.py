@@ -10,6 +10,61 @@ from Models.LHCModels.LHC_wGamma1 import nonlinear_constraints_mpr as nonlinear_
 
 from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity
 import os
+
+### printing results params
+def print_model_params(name, final_param, m):
+    """
+    Pretty-print model parameters assuming structure:
+    [kappa (m), theta (m), gamma1 (1), kappa_p (m), theta_p (m), sigma (m), sigma_err (1)]
+    """
+    print(f"\n{'='*60}")
+    print(f"Model: {name}")
+    print(f"{'='*60}")
+    if name == 'LHC Kalman':
+        idx = 0
+        kappa = final_param[idx:idx + m]; idx += m
+        theta = final_param[idx:idx + m]; idx += m
+        gamma1 = final_param[idx]; idx += 1
+        lambda_i = final_param[idx:idx + m]; idx += m
+        sigma = final_param[idx:idx + m]; idx += m
+        sigma_err = final_param[idx] if idx < len(final_param) else np.nan
+
+        print("κ      =", np.round(kappa, 4))
+        print("θ      =", np.round(theta, 4))
+        print("γ₁     =", np.round(gamma1, 4))
+        print("lambda     =", np.round(lambda_i, 4))
+        print("σ      =", np.round(sigma, 4))
+        print("σ_err  =", np.round(sigma_err, 6))
+        print()
+
+    elif name == 'LHC Filipovic':
+        idx = 0
+        kappa = final_param[idx:idx + m]; idx += m
+        theta = final_param[idx:idx + m]; idx += m
+        gamma1 = final_param[idx]; idx += 1
+
+        print("κ      =", np.round(kappa, 4))
+        print("θ      =", np.round(theta, 4))
+        print("γ₁     =", np.round(gamma1, 4))
+        print()
+
+    elif name == 'CIR':
+        idx = 0
+        kappa = final_param[idx:idx + m]; idx += m
+        theta = final_param[idx:idx + m]; idx += m
+        sigma = final_param[idx:idx + m]; idx += m
+        lambda_i = final_param[idx:idx + m]; idx += m
+        sigma_err = final_param[idx] if idx < len(final_param) else np.nan
+
+        print("κ      =", np.round(kappa, 4))
+        print("θ      =", np.round(theta, 4))
+        print("σ      =", np.round(sigma, 4))
+        print("lambda     =", np.round(lambda_i, 4))
+        print("σ_err  =", np.round(sigma_err, 6))
+        print()
+
+
+
 if __name__ == "__main__":
 
     t_grid = [0 + 0.25* i for i in range(0, int(10 / 0.25)+1)]
@@ -34,8 +89,7 @@ if __name__ == "__main__":
     from Models.LHCModels.LHC_single import cds_fun
     from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity
     import matplotlib.pyplot as plt
-    from Result_plots import print_model_params
-
+    
     X_dims = [1,2,3]
 
     ### FINALLY, CREATE TABLE FOR GLOBAL RMSE. ON GLOBAL SUMMARY
@@ -135,7 +189,7 @@ if __name__ == "__main__":
 
 
         for i in X_dims:
-            directory = f"./Results_MPR/{firm}"
+            directory = f"./Results_noMPR/{firm}"
 
             filepath = os.path.join(directory, f"Kalman_resultsLHC_NX{i}.npz")
             data = np.load(filepath)
@@ -165,7 +219,7 @@ if __name__ == "__main__":
             cir.set_params(final_paramCIR)
             print(f'AFC constr satisfied {np.all(cir.feller_constraint_mpr(final_paramCIR)>0)}')
             # Plot dir.
-            directory = f"./Results_MPR/Chapter7"
+            directory = f"./Results_noMPR/Chapter7"
 
 
             # Loop through maturities and make a separate plot for each
@@ -206,7 +260,6 @@ if __name__ == "__main__":
 
             # Recreated Spreads
 
-            # Example list of maturities (adjust names if your columns differ)
             maturities = [1,2, 3,4, 5, 7, 10]  # or ['1Y','3Y','5Y','7Y','10Y']
             fig, ax = plt.subplots(figsize=(10,6))
 
@@ -261,7 +314,6 @@ if __name__ == "__main__":
             cols_names = [f"LHCC({i}) Kalman",f"AFC({i}) Kalman"]
             # cols_names = [f"LHC Filipovic,m={i}",f"CIR Kalman,m={i}"]
 
-            # Your NumPy arrays: (n_obs, n_models)
             # e.g. rmse_series.shape == (T, 3)
             # and global scalars/vectors: rmse, ape, aae, arpe each (n_models,)
 
@@ -351,7 +403,7 @@ if __name__ == "__main__":
 
 
         for i in X_dims:
-            directory = f"./Results_MPR/{firm}"
+            directory = f"./Results_noMPR/{firm}"
 
             filepath = os.path.join(directory, f"Kalman_resultsLHC_NX{i}.npz")
             data = np.load(filepath)
@@ -393,7 +445,7 @@ if __name__ == "__main__":
             
 
             # Plot dir.
-            directory = f"./Results_MPR/wGamma1"
+            directory = f"./Results_noMPR/wGamma1"
 
 
             # Loop through maturities and make a separate plot for each
@@ -436,7 +488,6 @@ if __name__ == "__main__":
 
             # Recreated Spreads
 
-            # Example list of maturities (adjust names if your columns differ)
             maturities = [1,2, 3,4, 5, 7, 10]  # or ['1Y','3Y','5Y','7Y','10Y']
             fig, ax = plt.subplots(figsize=(10,6))
 
@@ -493,9 +544,6 @@ if __name__ == "__main__":
             cols_names = [f"LHCC({i}) Kalman, restricted",
                           f"LHCC({i}) Kalman, unrestricted",f"AFC({i}) Kalman"]
             # cols_names = [f"LHC Filipovic,m={i}",f"CIR Kalman,m={i}"]
-
-            # Your NumPy arrays: (n_obs, n_models)
-            # e.g. rmse_series.shape == (T, 3)
             # and global scalars/vectors: rmse, ape, aae, arpe each (n_models,)
 
             # --- Wrap arrays into DataFrames ---

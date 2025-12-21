@@ -30,7 +30,58 @@ if __name__ == "__main__":
     from Models.LHCModels.LHC_single import cds_fun
     from Models.BaselineCIR_alternative.CIR_Multifactor import CIRIntensity
     import matplotlib.pyplot as plt
-    from Result_plots import print_model_params
+    ### printing results params
+    def print_model_params(name, final_param, m):
+        """
+        Pretty-print model parameters assuming structure:
+        [kappa (m), theta (m), gamma1 (1), kappa_p (m), theta_p (m), sigma (m), sigma_err (1)]
+        """
+        print(f"\n{'='*60}")
+        print(f"Model: {name}")
+        print(f"{'='*60}")
+        if name == 'LHC Kalman':
+            idx = 0
+            kappa = final_param[idx:idx + m]; idx += m
+            theta = final_param[idx:idx + m]; idx += m
+            gamma1 = final_param[idx]; idx += 1
+            lambda_i = final_param[idx:idx + m]; idx += m
+            sigma = final_param[idx:idx + m]; idx += m
+            sigma_err = final_param[idx] if idx < len(final_param) else np.nan
+
+            print("κ      =", np.round(kappa, 4))
+            print("θ      =", np.round(theta, 4))
+            print("γ₁     =", np.round(gamma1, 4))
+            print("lambda     =", np.round(lambda_i, 4))
+            print("σ      =", np.round(sigma, 4))
+            print("σ_err  =", np.round(sigma_err, 6))
+            print()
+
+        elif name == 'LHC Filipovic':
+            idx = 0
+            kappa = final_param[idx:idx + m]; idx += m
+            theta = final_param[idx:idx + m]; idx += m
+            gamma1 = final_param[idx]; idx += 1
+
+            print("κ      =", np.round(kappa, 4))
+            print("θ      =", np.round(theta, 4))
+            print("γ₁     =", np.round(gamma1, 4))
+            print()
+
+        elif name == 'CIR':
+            idx = 0
+            kappa = final_param[idx:idx + m]; idx += m
+            theta = final_param[idx:idx + m]; idx += m
+            sigma = final_param[idx:idx + m]; idx += m
+            lambda_i = final_param[idx:idx + m]; idx += m
+            sigma_err = final_param[idx] if idx < len(final_param) else np.nan
+
+            print("κ      =", np.round(kappa, 4))
+            print("θ      =", np.round(theta, 4))
+            print("σ      =", np.round(sigma, 4))
+            print("lambda     =", np.round(lambda_i, 4))
+            print("σ_err  =", np.round(sigma_err, 6))
+            print()
+
 
     X_dims = [1,2,3] # [1,2,3]
     # Run 1-2 first. 3 might be very slow. 
